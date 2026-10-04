@@ -4,41 +4,31 @@ import {
 } from 'recharts';
 import { Calculator, Info, TrendingUp, Users, DollarSign, Sparkles, Loader2, Save, MessageCircle, Send, History, Trash2, Clock, Check } from 'lucide-react';
 
-const apiKey = "";
-
-// Gemini API呼び出し関数（対話履歴を配列で受け取れるように改修）
-const callGeminiAPI = async (contents) => {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-  const payload = {
-    contents: contents,
-  };
-
-  const maxRetries = 5;
-  const baseDelay = 1000;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      return data.candidates?.[0]?.content?.parts?.[0]?.text || "応答の生成に失敗しました。";
-    } catch (error) {
-      if (attempt === maxRetries) {
-        console.error("API call failed after max retries", error);
-        throw new Error("通信エラーが発生しました。しばらく経ってから再度お試しください。");
-      }
-      const delay = baseDelay * Math.pow(2, attempt);
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
+// GitHub Pages remains calculation-only. AI requests use the protected Vercel origin.
+const aiAvailable = import.meta.env.VITE_AI_ENABLED === 'true';
+const callOpenAI = async (contents) => {
+  if (!aiAvailable) throw new Error('AI機能はログインで保護された専用環境で利用できます。');
+  const messages = contents.map(({ role, parts }) => ({
+    role: role === 'model' ? 'assistant' : role,
+    content: parts.map(part => part.text).join('\n'),
+  }));
+  let response;
+  try {
+    response = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ messages }),
+      signal: AbortSignal.timeout(65000),
+    });
+  } catch {
+    throw new Error('通信が完了しませんでした。時間をおいて再度お試しください。');
   }
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !data?.text) {
+    throw new Error(data?.error || 'AIに接続できません。ログイン状態と管理者の設定を確認してください。');
+  }
+  return data.text;
 };
 
 // --- 計算ロジック (Model) ---
@@ -238,7 +228,7 @@ export default function App() {
 
     try {
       const contents = [{ role: 'user', parts: [{ text: prompt }] }];
-      const reportText = await callGeminiAPI(contents);
+      const reportText = await callOpenAI(contents);
       setAiReport(reportText);
     } catch (err) {
       setApiError(err.message);
@@ -248,7 +238,7 @@ export default function App() {
   };
 
   const handleSendMessage = async () => {
-    if (!chatInput.trim() || isChatting) return;
+    if (!aiAvailable || !chatInput.trim() || isChatting || isGenerating) return;
 
     const userMessage = chatInput.trim();
     setChatInput("");
@@ -266,12 +256,13 @@ export default function App() {
     ];
 
     try {
-      const replyText = await callGeminiAPI(contents);
+      const replyText = await callOpenAI(contents);
       setChatMessages([...newMessages, { role: 'model', text: replyText }]);
       setIsSavedDone(false); // チャットが追加されたら未保存状態へ
     } catch (err) {
       setApiError("チャット送信エラー: " + err.message);
-      // エラー時はユーザーのメッセージだけ残すかロールバックするか。今回は残す。
+      setChatMessages(chatMessages);
+      setChatInput(userMessage);
     } finally {
       setIsChatting(false);
     }
@@ -602,12 +593,12 @@ export default function App() {
                     AI経営分析レポート & 深掘りチャット
                   </h3>
                   <p className="text-sm text-purple-700 mt-1">
-                    現在の数値をAIが分析します。さらにチャットで具体的な改善策を相談・深掘りできます。
+                    OpenAIが現在の数値を分析し、改善策の相談に回答します。送信時にシミュレーションの数値と会話内容がOpenAIへ送られます。個人情報は入力しないでください。
                   </p>
                 </div>
                 <button
                   onClick={generateReport}
-                  disabled={isGenerating}
+                  disabled={!aiAvailable || isGenerating || isChatting}
                   className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2.5 rounded-lg font-medium transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap shadow-sm"
                 >
                   {isGenerating ? (
@@ -624,6 +615,9 @@ export default function App() {
                 </button>
               </div>
 
+              {!aiAvailable && (
+                <p className="text-sm text-purple-800 mb-4">AI機能は、ログインで保護された専用環境で利用できます。この画面では売上シミュレーションを利用できます。</p>
+              )}
               {apiError && (
                 <div className="bg-red-50 text-red-600 p-4 rounded-lg mt-4 text-sm border border-red-200">
                   {apiError}
@@ -697,6 +691,7 @@ export default function App() {
                     <div className="p-3 bg-white border-t border-gray-100 flex gap-2">
                       <input 
                         type="text" 
+                        maxLength={4000}
                         value={chatInput}
                         onChange={e => setChatInput(e.target.value)}
                         onKeyDown={e => {
@@ -706,11 +701,11 @@ export default function App() {
                         }}
                         placeholder="質問を入力してください..."
                         className="flex-1 p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 transition-shadow"
-                        disabled={isChatting}
+                        disabled={!aiAvailable || isChatting || isGenerating}
                       />
                       <button 
                         onClick={handleSendMessage}
-                        disabled={!chatInput.trim() || isChatting}
+                        disabled={!aiAvailable || !chatInput.trim() || isChatting || isGenerating}
                         className="bg-purple-600 text-white p-2.5 rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center min-w-[44px]"
                       >
                         <Send className="w-4 h-4" />
