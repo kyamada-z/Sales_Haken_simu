@@ -25,8 +25,11 @@ const callOpenAI = async (contents) => {
     throw new Error('通信が完了しませんでした。時間をおいて再度お試しください。');
   }
   const data = await response.json().catch(() => null);
+  if (response.status === 429) {
+    throw new Error('利用回数の上限に達しました。1分ほど待ってから再度お試しください。');
+  }
   if (!response.ok || !data?.text) {
-    throw new Error(data?.error || 'AIに接続できません。ログイン状態と管理者の設定を確認してください。');
+    throw new Error(typeof data?.error === 'string' ? data.error : 'AIに接続できません。ログイン状態と管理者の設定を確認してください。');
   }
   return data.text;
 };
