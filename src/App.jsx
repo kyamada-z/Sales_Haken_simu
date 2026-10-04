@@ -332,7 +332,7 @@ export default function App() {
           <div>
             <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
               <Calculator className="w-6 h-6 text-blue-600" />
-              SaaS風 派遣売上シミュレーション
+              派遣売上シミュレーション
             </h1>
             <p className="text-gray-500 mt-1 text-sm">
               派遣事業の売上をSaaSのPL（損益計算書）になぞらえ、「既存顧客からの売上」と「新規顧客からの売上」に分解して任意の期間で予測します。
