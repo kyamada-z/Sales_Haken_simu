@@ -1,0 +1,59 @@
+name: Security phase 2 verification
+
+on:
+  push:
+    branches: [codex/security-maintenance-phase2]
+  pull_request:
+    branches: [main]
+    paths:
+      - package.json
+      - package-lock.json
+      - scripts/security-policy*
+      - .github/workflows/security-verify.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout isolated branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .nvmrc
+      - name: Verify dependency update policy
+        run: node --test scripts/security-policy.test.mjs
+      - name: Check later phase 2 changes against the initial setup
+        shell: bash
+        run: |
+          baseline=$(git log --reverse --format=%H --diff-filter=A -- scripts/security-policy.mjs | head -n 1)
+          test -n "$baseline"
+          node scripts/security-policy.mjs --base "$baseline"
+      - name: Reproduce dependencies without install scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build application
+        run: npm run build
+      - name: Audit resolved npm dependencies
+        run: npm audit --json > security-audit.json
+      - name: Retain audit report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: security-audit-${{ github.sha }}
+          path: security-audit.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+# This workflow cannot deploy: read-only contents; no Pages permission or deployment step.
+
