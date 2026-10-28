@@ -16,7 +16,7 @@ concurrency:
 jobs:
   prepare:
     if: github.repository == 'kyamada-z/Sales_Haken_simu' && github.ref == 'refs/heads/main' && github.event.before == '6b943783e4a04cb28c72ce6855eb350557e6517d' && github.event.forced == false && github.event.deleted == false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -120,7 +120,7 @@ jobs:
 
   drill:
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -133,7 +133,6 @@ jobs:
     env:
       CANDIDATE_HASH: ${{ needs.prepare.outputs.candidate_sha256 }}
       ROLLBACK_HASH: ${{ needs.prepare.outputs.rollback_sha256 }}
-      PLAYWRIGHT_CORE: ${{ runner.temp }}/sales-browser/node_modules/playwright-core/index.mjs
     steps:
       - name: Checkout exact guarded workflow snapshot
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -167,6 +166,7 @@ jobs:
           python3 scripts/security-pilot-once.py tooling --out "$RUNNER_TEMP/sales-browser"
           npm ci --prefix "$RUNNER_TEMP/sales-browser" --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
           node "$RUNNER_TEMP/sales-browser/node_modules/playwright-core/cli.js" install --with-deps chromium
+          printf 'PLAYWRIGHT_CORE=%s\n' "$RUNNER_TEMP/sales-browser/node_modules/playwright-core/index.mjs" >> "$GITHUB_ENV"
       - name: Configure existing Pages
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b
       - name: Upload first candidate Pages artifact
