@@ -11,6 +11,9 @@ on:
       - scripts/security-policy*
       - .github/workflows/security-verify.yml
       - vite.config.js
+      - .github/workflows/deploy.yml
+      - scripts/security-pilot.py
+      - scripts/security-pilot.test.py
 
 permissions:
   contents: read
@@ -45,9 +48,13 @@ jobs:
           git merge-base --is-ancestor "$pilot" HEAD
           git diff --exit-code "$initial" HEAD -- . \
             ':!package.json' ':!package-lock.json' ':!vite.config.js' \
-            ':!.github/workflows/security-verify.yml'
+            ':!.github/workflows/security-verify.yml' ':!.github/workflows/deploy.yml' \
+            ':!scripts/security-pilot.py' ':!scripts/security-pilot.test.py'
           printf '%s\n' \
             '9bad5ead817b94a015bc5280a5853098321443b1460a18c2faaac6c37b01169f  vite.config.js' \
+            'ef92d532c5364a30971d98a0539dc04651e712232575209573cc73f06fe2653c  .github/workflows/deploy.yml' \
+            '0399e69ed5525c0d3c5966cb9ba2db8e326d6d6d7f4f05c35091f9e6d5f6a5b8  scripts/security-pilot.py' \
+            '9cef1ce02b7cdc1c36101452549ca3ce15f3eba9c132966981ecbd237d978868  scripts/security-pilot.test.py' \
             | sha256sum --check --status
           # Load the original validators, never a policy altered by the PR.
           git show "$initial:scripts/security-policy.mjs" > "$RUNNER_TEMP/trusted-security-policy.mjs"
@@ -62,6 +69,8 @@ jobs:
           validateLockfile(before('package.json'), after('package.json'), before('package-lock.json'), after('package-lock.json'));
           console.log('Reviewed Vite pilot baseline and ordinary same-major policy verified; this check cannot publish.');
           JS
+      - name: Verify pilot recovery boundaries offline
+        run: python3 scripts/security-pilot.test.py
       - name: Reproduce dependencies without install scripts
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build application
