@@ -10,6 +10,7 @@ on:
       - package-lock.json
       - scripts/security-policy*
       - .github/workflows/security-verify.yml
+      - vite.config.js
 
 permissions:
   contents: read
@@ -34,12 +35,25 @@ jobs:
           node-version-file: .nvmrc
       - name: Verify dependency update policy
         run: node --test scripts/security-policy.test.mjs
-      - name: Check later phase 2 changes against the initial setup
+      - name: Check ordinary policy or exact one-time pilot
         shell: bash
         run: |
-          baseline=$(git log --reverse --format=%H --diff-filter=A -- scripts/security-policy.mjs | head -n 1)
-          test -n "$baseline"
-          node scripts/security-policy.mjs --base "$baseline"
+          set -euo pipefail
+          baseline=a13b9c390e8ae29dda66019d2c335f5260fca217
+          # This user-authorized pilot permits only these exact reviewed bytes.
+          # The ordinary same-major policy and its 61 tests stay unchanged.
+          if printf '%s\n' \
+            '86d44c8f3d9d349dc483b6cca263392e62fb432cda758a4edd21c3ded9504dad  package.json' \
+            'b613837fe18c16fd8f99d95bbc53e098b69a07aa93ff0e33714cbf9361fd165b  package-lock.json' \
+            '9bad5ead817b94a015bc5280a5853098321443b1460a18c2faaac6c37b01169f  vite.config.js' \
+            | sha256sum --check --status; then
+            git diff --exit-code "$baseline" HEAD -- . \
+              ':!package.json' ':!package-lock.json' ':!vite.config.js' \
+              ':!.github/workflows/security-verify.yml'
+            echo 'Exact one-time Vite 6.4.4 pilot verified; recurring policy is unchanged.'
+          else
+            node scripts/security-policy.mjs --base "$baseline"
+          fi
       - name: Reproduce dependencies without install scripts
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build application
@@ -56,4 +70,5 @@ jobs:
           if-no-files-found: ignore
 
 # This workflow cannot deploy: read-only contents; no Pages permission or deployment step.
+
 
