@@ -35,25 +35,33 @@ jobs:
           node-version-file: .nvmrc
       - name: Verify dependency update policy
         run: node --test scripts/security-policy.test.mjs
-      - name: Check ordinary policy or exact one-time pilot
+      - name: Check reviewed pilot baseline and same-major policy
         shell: bash
         run: |
           set -euo pipefail
-          baseline=a13b9c390e8ae29dda66019d2c335f5260fca217
-          # This user-authorized pilot permits only these exact reviewed bytes.
-          # The ordinary same-major policy and its 61 tests stay unchanged.
-          if printf '%s\n' \
-            '86d44c8f3d9d349dc483b6cca263392e62fb432cda758a4edd21c3ded9504dad  package.json' \
-            'b613837fe18c16fd8f99d95bbc53e098b69a07aa93ff0e33714cbf9361fd165b  package-lock.json' \
+          initial=a13b9c390e8ae29dda66019d2c335f5260fca217
+          # The only approved major update is the immutable two-file pilot commit.
+          pilot=8e3b0360a583442445577e14689fe8dd04452905
+          git merge-base --is-ancestor "$pilot" HEAD
+          git diff --exit-code "$initial" HEAD -- . \
+            ':!package.json' ':!package-lock.json' ':!vite.config.js' \
+            ':!.github/workflows/security-verify.yml'
+          printf '%s\n' \
             '9bad5ead817b94a015bc5280a5853098321443b1460a18c2faaac6c37b01169f  vite.config.js' \
-            | sha256sum --check --status; then
-            git diff --exit-code "$baseline" HEAD -- . \
-              ':!package.json' ':!package-lock.json' ':!vite.config.js' \
-              ':!.github/workflows/security-verify.yml'
-            echo 'Exact one-time Vite 6.4.4 pilot verified; recurring policy is unchanged.'
-          else
-            node scripts/security-policy.mjs --base "$baseline"
-          fi
+            | sha256sum --check --status
+          # Load the original validators, never a policy altered by the PR.
+          git show "$initial:scripts/security-policy.mjs" > "$RUNNER_TEMP/trusted-security-policy.mjs"
+          TRUSTED_POLICY="$RUNNER_TEMP/trusted-security-policy.mjs" PILOT_BASE="$pilot" node --input-type=module <<'JS'
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync } from 'node:fs';
+          import { pathToFileURL } from 'node:url';
+          const { validateManifestChange, validateLockfile } = await import(pathToFileURL(process.env.TRUSTED_POLICY).href);
+          const before = path => JSON.parse(execFileSync('git', ['show', `${process.env.PILOT_BASE}:${path}`], {encoding:'utf8'}));
+          const after = path => JSON.parse(readFileSync(path, 'utf8'));
+          validateManifestChange(before('package.json'), after('package.json'));
+          validateLockfile(before('package.json'), after('package.json'), before('package-lock.json'), after('package-lock.json'));
+          console.log('Reviewed Vite pilot baseline and ordinary same-major policy verified; this check cannot publish.');
+          JS
       - name: Reproduce dependencies without install scripts
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build application
