@@ -1,0 +1,107 @@
+name: Sales automatic dependency verification
+
+on:
+  push:
+    branches: [codex/security-auto-*]
+  pull_request:
+    branches: [main]
+    paths:
+      - package.json
+      - package-lock.json
+      - .github/workflows/pages-auto-release.yml
+      - .github/workflows/security-auto-verify.yml
+      - .github/workflows/security-verify.yml
+      - scripts/security-auto-release.py
+      - scripts/security-auto-release.test.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sales-auto-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact proposed application and activation history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout immutable original policy, browser and tooling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 8a918ea18fc42d5312d840e1c8706b2b07f26a05
+          path: trusted
+          persist-credentials: false
+      - name: Verify exact release helper and original archive primitive before execution
+        run: |
+          printf '%s\n' \
+            'b12e14202c1d147a140b12d8487ec7663757929fd7791dd914376ef44244e14c  candidate/scripts/security-auto-release.py' \
+            'fec605dcc49eb92caac8dda4f6d7900440cdf06a8a57e887917fca21ea692965  candidate/scripts/security-auto-release.test.py' \
+            '0399e69ed5525c0d3c5966cb9ba2db8e326d6d6d7f4f05c35091f9e6d5f6a5b8  candidate/scripts/security-pilot.py' \
+            | sha256sum --check --status
+      - name: Set up original pinned Node version
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: trusted/.nvmrc
+      - name: Test immutable policy, browser rejection fixtures and new release boundaries
+        run: |
+          node --test trusted/scripts/security-policy.test.mjs
+          python3 trusted/scripts/security-pilot.test.py
+          node trusted/scripts/security-pilot-browser.mjs --self-test
+          python3 candidate/scripts/security-auto-release.test.py
+      - name: Enforce activation ancestry and dependency-only same-major policy
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git -C candidate rev-parse HEAD)
+          base="$PR_BASE"
+          if [ -z "$base" ]; then base=$(git -C candidate merge-base HEAD refs/remotes/origin/main); fi
+          python3 candidate/scripts/security-auto-release.py assess --repo candidate --base "$base" --head "$head" --allow-setup > scope.json
+          POLICY_BASE="$base" POLICY_HEAD="$head" node --input-type=module <<'JS'
+          import {execFileSync} from 'node:child_process';
+          import {pathToFileURL} from 'node:url';
+          const {validateManifestChange,validateLockfile}=await import(pathToFileURL(process.cwd()+'/trusted/scripts/security-policy.mjs'));
+          const read=(sha,path)=>JSON.parse(execFileSync('git',['-C','candidate','show',`${sha}:${path}`],{encoding:'utf8'}));
+          for(const base of ['8a918ea18fc42d5312d840e1c8706b2b07f26a05',process.env.POLICY_BASE]) {
+            validateManifestChange(read(base,'package.json'),read(process.env.POLICY_HEAD,'package.json'));
+            validateLockfile(read(base,'package.json'),read(process.env.POLICY_HEAD,'package.json'),read(base,'package-lock.json'),read(process.env.POLICY_HEAD,'package-lock.json'));
+          }
+          console.log('Immutable original same-major policy passed against trusted baseline and current PR/main base.');
+          JS
+      - name: Install without scripts, require zero audit and build exact proposed source
+        working-directory: candidate
+        env:
+          npm_config_registry: https://registry.npmjs.org
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm audit --json > ../audit.json
+          node --input-type=module -e 'import fs from "node:fs";if(JSON.parse(fs.readFileSync("../audit.json")).metadata.vulnerabilities.total!==0)throw Error("Audit must be zero")'
+          npm run build
+      - name: Install isolated pinned official Chromium tooling
+        run: |
+          python3 trusted/scripts/security-pilot-once.py tooling --out "$RUNNER_TEMP/sales-browser"
+          npm ci --prefix "$RUNNER_TEMP/sales-browser" --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+          node "$RUNNER_TEMP/sales-browser/node_modules/playwright-core/cli.js" install --with-deps chromium
+      - name: Verify calculations, three plots and synthetic report storage in real Chromium
+        env:
+          PLAYWRIGHT_CORE: ${{ runner.temp }}/sales-browser/node_modules/playwright-core/index.mjs
+        run: node trusted/scripts/security-pilot-browser.mjs --site candidate/dist --phase branch-ci --out evidence
+      - name: Retain read-only scope, audit and synthetic browser evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sales-auto-verify-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            scope.json
+            audit.json
+            evidence
+          if-no-files-found: ignore
+          retention-days: 30
