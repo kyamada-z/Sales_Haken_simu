@@ -1,48 +1,184 @@
-name: Deploy React App to Pages
+name: Sales one-time Pages release and recovery
 
+# Replaces the existing push-to-main Pages workflow for the pilot.
+# No push trigger: merging preparation must not publish Pages automatically.
 on:
-  push:
-    branches: ["main"] # mainブランチにプッシュされたら起動
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Prepare two immutable bundles, or publish one already prepared bundle
+        required: true
+        type: choice
+        options: [prepare, publish]
+      candidate_sha:
+        description: Fixed reviewed app SHA 2b173dc67dcddcaf7e6f0c354bbb08b123675a28
+        required: true
+        type: string
+      preparation_run_id:
+        description: Successful prepare run ID (publish only)
+        required: false
+        type: string
+      bundle_kind:
+        description: Which immutable artifact to publish (publish only)
+        required: true
+        type: choice
+        options: [candidate, rollback]
+      bundle_sha256:
+        description: SHA-256 printed by prepare for the selected bundle (publish only)
+        required: false
+        type: string
+      expected_live_index_sha256:
+        description: Expected currently served index.html SHA-256; prevents overwriting an unexpected version
+        required: false
+        type: string
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: "pages"
-  cancel-in-progress: true
+  group: pages
+  cancel-in-progress: false
 
 jobs:
-  deploy:
+  prepare:
+    if: github.ref == 'refs/heads/main' && inputs.operation == 'prepare'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout trusted pilot helper
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: trusted
+          persist-credentials: false
+      - name: Validate requested commit
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: python3 -c 'import os; assert os.environ["CANDIDATE_SHA"] == "2b173dc67dcddcaf7e6f0c354bbb08b123675a28", "Only the fixed reviewed app commit is permitted"'
+      - name: Verify trusted archive and rejection behavior offline
+        run: python3 trusted/scripts/security-pilot.test.py
+      - name: Capture exact current production recovery bytes before any release
+        run: |
+          python3 trusted/scripts/security-pilot.py capture --out recovery-site
+          python3 trusted/scripts/security-pilot.py pack --site recovery-site --kind rollback --commit e5b859e220c1b21c8611c4c69f603f5ea651f00f --out rollback/site-bundle.tar > rollback-summary.json
+      - name: Checkout exact reviewed candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          path: candidate
+          persist-credentials: false
+      - name: Set up repository Node version
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: candidate/.nvmrc
+      - name: Reproduce, test, audit and build candidate
+        working-directory: candidate
+        env:
+          npm_config_registry: https://registry.npmjs.org
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test scripts/security-policy.test.mjs
+          node --input-type=module -e 'import fs from "node:fs";const l=JSON.parse(fs.readFileSync("package-lock.json"));if(l.packages["node_modules/vite"].version!=="6.4.4"||l.packages["node_modules/esbuild"].version!=="0.25.12")throw Error("Unexpected pilot dependency versions")'
+          npm audit --json > ../candidate-audit.json
+          npm run build
+      - name: Package exact built candidate
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: python3 trusted/scripts/security-pilot.py pack --site candidate/dist --kind candidate --commit "$CANDIDATE_SHA" --out fixed/site-bundle.tar > candidate-summary.json
+      - name: Retain immutable candidate bundle
+        id: fixed
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sales-pilot-candidate
+          path: fixed/site-bundle.tar
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain immutable recovery bundle
+        id: rollback
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sales-pilot-rollback
+          path: rollback/site-bundle.tar
+          if-no-files-found: error
+          retention-days: 30
+      - name: Record hashes and immutable artifact IDs
+        env:
+          FIXED_ID: ${{ steps.fixed.outputs.artifact-id }}
+          ROLLBACK_ID: ${{ steps.rollback.outputs.artifact-id }}
+        run: |
+          cat candidate-summary.json rollback-summary.json >> "$GITHUB_STEP_SUMMARY"
+          printf '\nPreparation run: %s\nCandidate artifact ID: %s\nRollback artifact ID: %s\n' "$GITHUB_RUN_ID" "$FIXED_ID" "$ROLLBACK_ID" >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    if: github.ref == 'refs/heads/main' && inputs.operation == 'publish'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Checkout trusted pilot helper
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          node-version-file: .nvmrc
-         # cache: 'npm'　　<-- 削除するか、このように#をつけて消します
-
-      - name: Install dependencies
-        run: npm ci || npm install
-
-      - name: Build
-        run: npm run build
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v4
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify preparation provenance and unchanged main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREPARATION_RUN_ID: ${{ inputs.preparation_run_id }}
+        run: python3 scripts/security-pilot.py provenance --run-id "$PREPARATION_RUN_ID" --workflow-sha "$GITHUB_SHA"
+      - name: Download selected immutable prepared artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          path: './dist' # Viteの場合は'./dist'、Create React Appなどの場合は'./build'になります
-
-      - name: Deploy to GitHub Pages
+          name: sales-pilot-${{ inputs.bundle_kind }}
+          path: selected-bundle
+          run-id: ${{ inputs.preparation_run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify bundle identity and safely materialize exact site bytes
+        env:
+          BUNDLE_KIND: ${{ inputs.bundle_kind }}
+          BUNDLE_SHA256: ${{ inputs.bundle_sha256 }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          source_commit="$CANDIDATE_SHA"
+          if [ "$BUNDLE_KIND" = rollback ]; then source_commit=e5b859e220c1b21c8611c4c69f603f5ea651f00f; fi
+          python3 scripts/security-pilot.py extract --bundle selected-bundle/site-bundle.tar --sha256 "$BUNDLE_SHA256" --kind "$BUNDLE_KIND" --commit "$source_commit" --out exact-site
+          printf 'PILOT_SOURCE_COMMIT=%s\n' "$source_commit" >> "$GITHUB_ENV"
+      - name: Configure Pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b
+      - name: Upload exact Pages site
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa
+        with:
+          path: exact-site
+          retention-days: 30
+      - name: Recheck main and expected live version immediately before deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREPARATION_RUN_ID: ${{ inputs.preparation_run_id }}
+          EXPECTED_LIVE_INDEX_SHA256: ${{ inputs.expected_live_index_sha256 }}
+        run: |
+          python3 scripts/security-pilot.py provenance --run-id "$PREPARATION_RUN_ID" --workflow-sha "$GITHUB_SHA"
+          python3 scripts/security-pilot.py check-current --index-sha256 "$EXPECTED_LIVE_INDEX_SHA256"
+      - name: Deploy exact selected bundle to Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
+      - name: Verify published first-party hashes
+        env:
+          BUNDLE_KIND: ${{ inputs.bundle_kind }}
+          BUNDLE_SHA256: ${{ inputs.bundle_sha256 }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5 6; do
+            if python3 scripts/security-pilot.py check-live --bundle selected-bundle/site-bundle.tar --sha256 "$BUNDLE_SHA256" --kind "$BUNDLE_KIND" --commit "$PILOT_SOURCE_COMMIT"; then exit 0; fi
+            if [ "$attempt" -lt 6 ]; then sleep 10; fi
+          done
+          exit 1
