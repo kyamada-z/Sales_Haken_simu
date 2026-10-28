@@ -1,0 +1,324 @@
+name: Sales authorized one-time Pages drill
+
+# One direct child of this exact main only. Later pushes cannot release anything.
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/pages-pilot-once.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 'kyamada-z/Sales_Haken_simu' && github.ref == 'refs/heads/main' && github.event.before == '6b943783e4a04cb28c72ce6855eb350557e6517d' && github.event.forced == false && github.event.deleted == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      candidate_sha256: ${{ steps.identity.outputs.candidate_sha256 }}
+      rollback_sha256: ${{ steps.identity.outputs.rollback_sha256 }}
+      candidate_artifact: ${{ steps.identity.outputs.candidate_artifact }}
+      rollback_artifact: ${{ steps.identity.outputs.rollback_artifact }}
+    steps:
+      - name: Checkout exact workflow snapshot
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: trusted
+          persist-credentials: false
+      - name: Enforce exact event, direct parent, five paths, workflow and unchanged main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 trusted/scripts/security-pilot-once.py guard --event "$GITHUB_EVENT_PATH"
+      - name: Exercise original archive and new provenance rejection tests
+        run: |
+          python3 trusted/scripts/security-pilot.test.py
+          python3 trusted/scripts/security-pilot-once.test.py
+          node trusted/scripts/security-pilot-browser.mjs --self-test
+      - name: Preserve exact observed old HTML and JavaScript before any release
+        run: |
+          python3 trusted/scripts/security-pilot.py capture --out recovery-site
+          python3 trusted/scripts/security-pilot.py pack --site recovery-site --kind rollback --commit e5b859e220c1b21c8611c4c69f603f5ea651f00f --out rollback/site-bundle.tar > rollback-summary.json
+      - name: Checkout fixed reviewed app source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 2b173dc67dcddcaf7e6f0c354bbb08b123675a28
+          path: candidate
+          persist-credentials: false
+      - name: Set up pinned repository Node version
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: candidate/.nvmrc
+      - name: Reproduce fixed app, original policy tests, zero audit and build
+        working-directory: candidate
+        env:
+          npm_config_registry: https://registry.npmjs.org
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 2b173dc67dcddcaf7e6f0c354bbb08b123675a28
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test scripts/security-policy.test.mjs
+          node --input-type=module -e 'import fs from "node:fs";const l=JSON.parse(fs.readFileSync("package-lock.json"));if(l.packages["node_modules/vite"].version!=="6.4.4"||l.packages["node_modules/esbuild"].version!=="0.25.12")throw Error("Unexpected pilot dependency versions")'
+          npm audit --json > ../candidate-audit.json
+          node --input-type=module -e 'import fs from "node:fs";if(JSON.parse(fs.readFileSync("../candidate-audit.json")).metadata.vulnerabilities.total!==0)throw Error("Audit must be zero")'
+          npm run build
+      - name: Install isolated integrity-pinned official Chromium test tooling
+        run: |
+          python3 trusted/scripts/security-pilot-once.py tooling --out "$RUNNER_TEMP/sales-browser"
+          npm ci --prefix "$RUNNER_TEMP/sales-browser" --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+          node "$RUNNER_TEMP/sales-browser/node_modules/playwright-core/cli.js" install --with-deps chromium
+      - name: Verify calculations, three charts and synthetic report storage before production
+        env:
+          PLAYWRIGHT_CORE: ${{ runner.temp }}/sales-browser/node_modules/playwright-core/index.mjs
+        run: node trusted/scripts/security-pilot-browser.mjs --site candidate/dist --phase preflight --out evidence
+      - name: Package immutable candidate and record bundle identities
+        id: identity
+        run: |
+          python3 trusted/scripts/security-pilot.py pack --site candidate/dist --kind candidate --commit 2b173dc67dcddcaf7e6f0c354bbb08b123675a28 --out fixed/site-bundle.tar > candidate-summary.json
+          python3 - <<'PY'
+          import json, os
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              for kind in ['candidate', 'rollback']:
+                  value=json.load(open(kind+'-summary.json'))
+                  output.write(kind+'_sha256='+value['bundle_sha256']+'\n')
+                  output.write(kind+'_artifact=sales-once-bundle-'+kind+'-'+os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT']+'\n')
+          PY
+          cat candidate-summary.json rollback-summary.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain immutable candidate bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ steps.identity.outputs.candidate_artifact }}
+          path: fixed/site-bundle.tar
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain immutable exact old recovery bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ steps.identity.outputs.rollback_artifact }}
+          path: rollback/site-bundle.tar
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain preparation evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sales-once-prepare-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            evidence
+            candidate-audit.json
+            candidate-summary.json
+            rollback-summary.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  drill:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: https://kyamada-z.github.io/Sales_Haken_simu/
+    env:
+      CANDIDATE_HASH: ${{ needs.prepare.outputs.candidate_sha256 }}
+      ROLLBACK_HASH: ${{ needs.prepare.outputs.rollback_sha256 }}
+    steps:
+      - name: Checkout exact guarded workflow snapshot
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Recheck authorized run and main before preparing any publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/security-pilot-once.py guard --event "$GITHUB_EVENT_PATH"
+      - name: Download immutable candidate from successful preparation job
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ${{ needs.prepare.outputs.candidate_artifact }}
+          path: fixed
+      - name: Download immutable old recovery from the same preparation
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ${{ needs.prepare.outputs.rollback_artifact }}
+          path: rollback
+      - name: Verify hashes, source identities and strict paths before extraction
+        run: |
+          python3 scripts/security-pilot.py extract --bundle fixed/site-bundle.tar --sha256 "$CANDIDATE_HASH" --kind candidate --commit 2b173dc67dcddcaf7e6f0c354bbb08b123675a28 --out candidate-site
+          python3 scripts/security-pilot.py extract --bundle rollback/site-bundle.tar --sha256 "$ROLLBACK_HASH" --kind rollback --commit e5b859e220c1b21c8611c4c69f603f5ea651f00f --out rollback-site
+      - name: Set up pinned Node version for isolated browser tooling
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .nvmrc
+      - name: Install isolated pinned Chromium tooling before any publish
+        run: |
+          python3 scripts/security-pilot-once.py tooling --out "$RUNNER_TEMP/sales-browser"
+          npm ci --prefix "$RUNNER_TEMP/sales-browser" --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+          node "$RUNNER_TEMP/sales-browser/node_modules/playwright-core/cli.js" install --with-deps chromium
+          printf 'PLAYWRIGHT_CORE=%s\n' "$RUNNER_TEMP/sales-browser/node_modules/playwright-core/index.mjs" >> "$GITHUB_ENV"
+      - name: Configure existing Pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b
+      - name: Upload first candidate Pages artifact
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa
+        with:
+          name: sales-once-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate-site
+          retention-days: 30
+      - name: Recheck main and exact live bytes immediately before first candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/security-pilot-once.py guard --event "$GITHUB_EVENT_PATH"
+          allow=rollback
+          if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ]; then allow=either; fi
+          python3 scripts/security-pilot-once.py known-live --candidate fixed/site-bundle.tar --candidate-sha256 "$CANDIDATE_HASH" --rollback rollback/site-bundle.tar --rollback-sha256 "$ROLLBACK_HASH" --allow "$allow"
+      - name: Publish candidate
+        id: candidate
+        continue-on-error: true
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
+        with:
+          artifact_name: sales-once-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Verify first candidate HTTP bytes, Chromium calculations, charts and storage
+        id: candidate_check
+        if: steps.candidate.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python3 scripts/security-pilot-once.py known-live --candidate fixed/site-bundle.tar --candidate-sha256 "$CANDIDATE_HASH" --rollback rollback/site-bundle.tar --rollback-sha256 "$ROLLBACK_HASH" --allow candidate --attempts 6 > candidate-http.json
+          node scripts/security-pilot-browser.mjs --site candidate-site --live --phase candidate --out evidence
+
+      # Runs after candidate failure as well as success; a failed drill stays failed.
+      - name: Upload exact old Pages artifact for drill or recovery
+        id: old_upload
+        if: always() && !cancelled() && (steps.candidate.outcome == 'success' || steps.candidate.outcome == 'failure')
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa
+        with:
+          name: sales-once-rollback-${{ github.run_id }}-${{ github.run_attempt }}
+          path: rollback-site
+          retention-days: 30
+      - name: Recheck main and known live identity immediately before old recovery
+        id: old_guard
+        if: always() && !cancelled() && steps.old_upload.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/security-pilot-once.py guard --event "$GITHUB_EVENT_PATH"
+          python3 scripts/security-pilot-once.py known-live --candidate fixed/site-bundle.tar --candidate-sha256 "$CANDIDATE_HASH" --rollback rollback/site-bundle.tar --rollback-sha256 "$ROLLBACK_HASH" --allow either
+      - name: Publish exact old recovery bytes
+        id: old
+        if: always() && !cancelled() && steps.old_guard.outcome == 'success'
+        continue-on-error: true
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
+        with:
+          artifact_name: sales-once-rollback-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Verify old HTTP bytes and real Chromium behavior
+        id: old_check
+        if: always() && !cancelled() && steps.old.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python3 scripts/security-pilot-once.py known-live --candidate fixed/site-bundle.tar --candidate-sha256 "$CANDIDATE_HASH" --rollback rollback/site-bundle.tar --rollback-sha256 "$ROLLBACK_HASH" --allow rollback --attempts 6 > rollback-http.json
+          node scripts/security-pilot-browser.mjs --site rollback-site --live --phase rollback --out evidence
+
+      - name: Upload final candidate only after two successful verified phases
+        id: final_upload
+        if: success() && steps.candidate.outcome == 'success' && steps.candidate_check.outcome == 'success' && steps.old_check.outcome == 'success'
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa
+        with:
+          name: sales-once-republish-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate-site
+          retention-days: 30
+      - name: Recheck main and exact old version immediately before republish
+        id: final_guard
+        if: success() && steps.final_upload.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/security-pilot-once.py guard --event "$GITHUB_EVENT_PATH"
+          python3 scripts/security-pilot-once.py known-live --candidate fixed/site-bundle.tar --candidate-sha256 "$CANDIDATE_HASH" --rollback rollback/site-bundle.tar --rollback-sha256 "$ROLLBACK_HASH" --allow rollback
+      - name: Republish same immutable candidate bytes
+        id: final
+        if: success() && steps.final_guard.outcome == 'success'
+        continue-on-error: true
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
+        with:
+          artifact_name: sales-once-republish-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Verify final HTTP bytes and real Chromium behavior
+        id: final_check
+        if: success() && steps.final.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python3 scripts/security-pilot-once.py known-live --candidate fixed/site-bundle.tar --candidate-sha256 "$CANDIDATE_HASH" --rollback rollback/site-bundle.tar --rollback-sha256 "$ROLLBACK_HASH" --allow candidate --attempts 6 > republish-http.json
+          node scripts/security-pilot-browser.mjs --site candidate-site --live --phase republish --out evidence
+
+      # Final-candidate failure also recovers old bytes, only while main/live remain known.
+      - name: Upload old fallback after failed republish
+        id: fallback_upload
+        if: always() && !cancelled() && (steps.final.outcome == 'failure' || steps.final_check.outcome == 'failure')
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa
+        with:
+          name: sales-once-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: rollback-site
+          retention-days: 30
+      - name: Guard final fallback against moved main or unknown live bytes
+        id: fallback_guard
+        if: always() && !cancelled() && steps.fallback_upload.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/security-pilot-once.py guard --event "$GITHUB_EVENT_PATH"
+          python3 scripts/security-pilot-once.py known-live --candidate fixed/site-bundle.tar --candidate-sha256 "$CANDIDATE_HASH" --rollback rollback/site-bundle.tar --rollback-sha256 "$ROLLBACK_HASH" --allow either
+      - name: Recover old bytes after failed republish
+        id: fallback
+        if: always() && !cancelled() && steps.fallback_guard.outcome == 'success'
+        continue-on-error: true
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
+        with:
+          artifact_name: sales-once-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Verify fallback HTTP bytes and real Chromium behavior
+        id: fallback_check
+        if: always() && !cancelled() && steps.fallback.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python3 scripts/security-pilot-once.py known-live --candidate fixed/site-bundle.tar --candidate-sha256 "$CANDIDATE_HASH" --rollback rollback/site-bundle.tar --rollback-sha256 "$ROLLBACK_HASH" --allow rollback --attempts 6 > recovery-http.json
+          node scripts/security-pilot-browser.mjs --site rollback-site --live --phase recovery --out evidence
+      - name: Record actual phase outcomes and fail incomplete drills
+        if: always()
+        env:
+          CANDIDATE: ${{ steps.candidate.outcome }}
+          CANDIDATE_CHECK: ${{ steps.candidate_check.outcome }}
+          OLD: ${{ steps.old.outcome }}
+          OLD_CHECK: ${{ steps.old_check.outcome }}
+          FINAL: ${{ steps.final.outcome }}
+          FINAL_CHECK: ${{ steps.final_check.outcome }}
+          FALLBACK_CHECK: ${{ steps.fallback_check.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json,os
+          phases={k:os.environ[k] for k in ['CANDIDATE','CANDIDATE_CHECK','OLD','OLD_CHECK','FINAL','FINAL_CHECK','FALLBACK_CHECK']}
+          text=json.dumps(phases,indent=2)
+          print(text)
+          with open('phase-outcomes.json','w') as f: f.write(text+'\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f: f.write('\n'+text+'\n')
+          assert all(phases[k]=='success' for k in phases if k!='FALLBACK_CHECK'), 'Drill incomplete/failed; check actual recovery outcome. No failure is reported as success.'
+          PY
+      - name: Retain phase screenshots, synthetic browser reports and HTTP hashes
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sales-once-drill-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            evidence
+            *-http.json
+            phase-outcomes.json
+          if-no-files-found: ignore
+          retention-days: 30
