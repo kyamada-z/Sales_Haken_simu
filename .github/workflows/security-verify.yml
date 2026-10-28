@@ -14,6 +14,10 @@ on:
       - .github/workflows/deploy.yml
       - scripts/security-pilot.py
       - scripts/security-pilot.test.py
+      - .github/workflows/pages-pilot-once.yml
+      - scripts/security-pilot-once.py
+      - scripts/security-pilot-once.test.py
+      - scripts/security-pilot-browser.mjs
 
 permissions:
   contents: read
@@ -49,12 +53,19 @@ jobs:
           git diff --exit-code "$initial" HEAD -- . \
             ':!package.json' ':!package-lock.json' ':!vite.config.js' \
             ':!.github/workflows/security-verify.yml' ':!.github/workflows/deploy.yml' \
-            ':!scripts/security-pilot.py' ':!scripts/security-pilot.test.py'
+            ':!scripts/security-pilot.py' ':!scripts/security-pilot.test.py' \
+            ':!.github/workflows/pages-pilot-once.yml' \
+            ':!scripts/security-pilot-once.py' ':!scripts/security-pilot-once.test.py' \
+            ':!scripts/security-pilot-browser.mjs'
           printf '%s\n' \
             '9bad5ead817b94a015bc5280a5853098321443b1460a18c2faaac6c37b01169f  vite.config.js' \
             'ef92d532c5364a30971d98a0539dc04651e712232575209573cc73f06fe2653c  .github/workflows/deploy.yml' \
             '0399e69ed5525c0d3c5966cb9ba2db8e326d6d6d7f4f05c35091f9e6d5f6a5b8  scripts/security-pilot.py' \
             '9cef1ce02b7cdc1c36101452549ca3ce15f3eba9c132966981ecbd237d978868  scripts/security-pilot.test.py' \
+            'b2b6337fabd62c139810d2a8ebadfe2898024bc0a18346aad411c1c3ff9dbb28  .github/workflows/pages-pilot-once.yml' \
+            'a557f7807ef92b04a2b5f8bd97950c870d0f52c70b4b3981dac0346bb0497a93  scripts/security-pilot-once.py' \
+            '9e5f8b7b0bdc5417d91912ee8165bce79d7ab89eec9a97bb763abe3fa503af17  scripts/security-pilot-once.test.py' \
+            '82127328a2d259a794dbe3ef9f2960af43e0e4f08ad5edd9e2173a2976f288c6  scripts/security-pilot-browser.mjs' \
             | sha256sum --check --status
           # Load the original validators, never a policy altered by the PR.
           git show "$initial:scripts/security-policy.mjs" > "$RUNNER_TEMP/trusted-security-policy.mjs"
@@ -70,18 +81,38 @@ jobs:
           console.log('Reviewed Vite pilot baseline and ordinary same-major policy verified; this check cannot publish.');
           JS
       - name: Verify pilot recovery boundaries offline
-        run: python3 scripts/security-pilot.test.py
+        run: |
+          python3 scripts/security-pilot.test.py
+          python3 scripts/security-pilot-once.test.py
+          node scripts/security-pilot-browser.mjs --self-test
       - name: Reproduce dependencies without install scripts
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build application
         run: npm run build
       - name: Audit resolved npm dependencies
         run: npm audit --json > security-audit.json
+      - name: Install temporary integrity-pinned official Chromium tooling
+        run: |
+          python3 scripts/security-pilot-once.py tooling --out "$RUNNER_TEMP/sales-browser"
+          npm ci --prefix "$RUNNER_TEMP/sales-browser" --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+          node "$RUNNER_TEMP/sales-browser/node_modules/playwright-core/cli.js" install --with-deps chromium
+      - name: Verify real browser calculations, three charts and synthetic storage on loopback
+        env:
+          PLAYWRIGHT_CORE: ${{ runner.temp }}/sales-browser/node_modules/playwright-core/index.mjs
+        run: node scripts/security-pilot-browser.mjs --site dist --phase branch-ci --out browser-evidence
+      - name: Retain synthetic browser evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: security-browser-${{ github.sha }}-${{ github.run_attempt }}
+          path: browser-evidence
+          retention-days: 14
+          if-no-files-found: ignore
       - name: Retain audit report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: security-audit-${{ github.sha }}
+          name: security-audit-${{ github.sha }}-${{ github.run_attempt }}
           path: security-audit.json
           retention-days: 14
           if-no-files-found: ignore
