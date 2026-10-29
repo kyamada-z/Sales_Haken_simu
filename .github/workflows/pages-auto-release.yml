@@ -1,6 +1,6 @@
 name: Sales guarded automatic Pages release
 
-# Activation validates the full pipeline without publishing. Later pushes are
+# Initial publication is one exact reviewed bundled-CSS tree. Later pushes are
 # eligible only for existing package.json/package-lock.json same-major updates.
 on:
   push:
@@ -18,6 +18,8 @@ jobs:
     if: github.repository == 'kyamada-z/Sales_Haken_simu' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
     permissions:
       contents: read
       actions: read
@@ -39,22 +41,20 @@ jobs:
       - name: Checkout immutable policy, browser and tooling baseline
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 8a918ea18fc42d5312d840e1c8706b2b07f26a05
+          ref: '3c5b3a06e238eac6095f16cfa5ee71012f4ca535'
           path: trusted
+          fetch-depth: 0
           persist-credentials: false
-      - name: Verify helper identities before executing any proposed code
+      - name: Verify immutable helper checkout before executing code
         run: |
-          printf '%s\n' \
-            'b12e14202c1d147a140b12d8487ec7663757929fd7791dd914376ef44244e14c  candidate/scripts/security-auto-release.py' \
-            'fec605dcc49eb92caac8dda4f6d7900440cdf06a8a57e887917fca21ea692965  candidate/scripts/security-auto-release.test.py' \
-            '0399e69ed5525c0d3c5966cb9ba2db8e326d6d6d7f4f05c35091f9e6d5f6a5b8  candidate/scripts/security-pilot.py' \
-            | sha256sum --check --status
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '3c5b3a06e238eac6095f16cfa5ee71012f4ca535' candidate "$GITHUB_SHA"
       - name: Guard exact push, immutable activation tree, scope and current main
         id: scope
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 candidate/scripts/security-auto-release.py guard --repo candidate --event "$GITHUB_EVENT_PATH" > scope.json
+          python3 trusted/scripts/security-bundled-release.py guard --repo candidate --event "$GITHUB_EVENT_PATH" > scope.json
           python3 - <<'PY'
           import json,os
           scope=json.load(open('scope.json'))
@@ -72,28 +72,16 @@ jobs:
           node --test trusted/scripts/security-policy.test.mjs
           python3 trusted/scripts/security-pilot.test.py
           node trusted/scripts/security-pilot-browser.mjs --self-test
-          python3 candidate/scripts/security-auto-release.test.py
-      - name: Apply original same-major validators to current base and fixed trusted baseline
-        env:
-          POLICY_BASE: ${{ steps.scope.outputs.base }}
-        run: |
-          node --input-type=module <<'JS'
-          import {execFileSync} from 'node:child_process';
-          import {pathToFileURL} from 'node:url';
-          const {validateManifestChange,validateLockfile}=await import(pathToFileURL(process.cwd()+'/trusted/scripts/security-policy.mjs'));
-          const read=(sha,path)=>JSON.parse(execFileSync('git',['-C','candidate','show',`${sha}:${path}`],{encoding:'utf8'}));
-          for(const base of ['8a918ea18fc42d5312d840e1c8706b2b07f26a05',process.env.POLICY_BASE]) {
-            validateManifestChange(read(base,'package.json'),read(process.env.GITHUB_SHA,'package.json'));
-            validateLockfile(read(base,'package.json'),read(process.env.GITHUB_SHA,'package.json'),read(base,'package-lock.json'),read(process.env.GITHUB_SHA,'package-lock.json'));
-          }
-          console.log('Original same-major policy passed against both baselines.');
-          JS
+          python3 trusted/scripts/security-auto-release.test.py
+          python3 trusted/scripts/security-bundled-release.test.py
+      - name: Apply immutable bootstrap identity or original same-major validators
+        run: node trusted/scripts/security-bundled-policy.mjs --repo candidate --scope scope.json
       - name: Find latest proven published candidate, or the exact reviewed bootstrap
         id: previous
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 candidate/scripts/security-auto-release.py select-previous --repo candidate --head "$GITHUB_SHA" > previous-selection.json
+          python3 trusted/scripts/security-bundled-release.py select-previous --repo candidate --head "$GITHUB_SHA" > previous-selection.json
           python3 - <<'PY'
           import json,os
           value=json.load(open('previous-selection.json'))
@@ -115,9 +103,9 @@ jobs:
         run: |
           mkdir -p rollback
           if [ "$PREVIOUS_KIND" = artifact ]; then
-            python3 candidate/scripts/security-auto-release.py capture --selection previous-selection.json --previous previous/site-bundle.tar --previous-summary previous/summary.json --out old-site --bundle rollback/site-bundle.tar > rollback/summary.json
+            python3 trusted/scripts/security-bundled-release.py capture --selection previous-selection.json --previous previous/site-bundle.tar --previous-summary previous/summary.json --out old-site --bundle rollback/site-bundle.tar > rollback/summary.json
           else
-            python3 candidate/scripts/security-auto-release.py capture --selection previous-selection.json --out old-site --bundle rollback/site-bundle.tar > rollback/summary.json
+            python3 trusted/scripts/security-bundled-release.py capture --selection previous-selection.json --out old-site --bundle rollback/site-bundle.tar > rollback/summary.json
           fi
       - name: Reproduce exact candidate with no install scripts, zero audit and production build
         working-directory: candidate
@@ -129,6 +117,10 @@ jobs:
           npm audit --json > ../audit.json
           node --input-type=module -e 'import fs from "node:fs";if(JSON.parse(fs.readFileSync("../audit.json")).metadata.vulnerabilities.total!==0)throw Error("Audit must be zero")'
           npm run build
+      - name: Recheck trusted helpers and exact candidate working bytes after build
+        run: |
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '3c5b3a06e238eac6095f16cfa5ee71012f4ca535' candidate "$GITHUB_SHA"
       - name: Install isolated integrity-pinned official Chromium tooling
         run: |
           python3 trusted/scripts/security-pilot-once.py tooling --out "$RUNNER_TEMP/sales-browser"
@@ -138,13 +130,18 @@ jobs:
         env:
           PLAYWRIGHT_CORE: ${{ runner.temp }}/sales-browser/node_modules/playwright-core/index.mjs
         run: |
-          node trusted/scripts/security-pilot-browser.mjs --site old-site --live --phase rollback --out evidence/known-good
-          node trusted/scripts/security-pilot-browser.mjs --site candidate/dist --phase preflight --out evidence/candidate
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '3c5b3a06e238eac6095f16cfa5ee71012f4ca535' candidate "$GITHUB_SHA"
+          node trusted/scripts/security-bundled-browser.mjs --allow-legacy --site old-site --live --phase rollback --out evidence/known-good
+          node trusted/scripts/security-bundled-browser.mjs --site candidate/dist --phase preflight --out evidence/candidate
+          node trusted/scripts/security-bundled-browser.mjs --site candidate/dist --phase preflight --out evidence/candidate-mobile --mobile
       - name: Package candidate and record exact immutable bundle identities
         id: identity
         run: |
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '3c5b3a06e238eac6095f16cfa5ee71012f4ca535' candidate "$GITHUB_SHA"
           mkdir -p fixed
-          python3 candidate/scripts/security-auto-release.py pack --site candidate/dist --kind candidate --source "$GITHUB_SHA" --out fixed/site-bundle.tar > fixed/summary.json
+          python3 trusted/scripts/security-bundled-release.py pack --site candidate/dist --kind candidate --source "$GITHUB_SHA" --out fixed/site-bundle.tar > fixed/summary.json
           python3 - <<'PY'
           import json,os
           with open(os.environ['GITHUB_OUTPUT'],'a') as f:
@@ -196,6 +193,7 @@ jobs:
       name: github-pages
       url: https://kyamada-z.github.io/Sales_Haken_simu/
     env:
+      PYTHONDONTWRITEBYTECODE: '1'
       CANDIDATE_HASH: ${{ needs.prepare.outputs.candidate_hash }}
       ROLLBACK_HASH: ${{ needs.prepare.outputs.rollback_hash }}
       ROLLBACK_SOURCE: ${{ needs.prepare.outputs.rollback_source }}
@@ -204,18 +202,24 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ github.sha }}
+          path: candidate
           fetch-depth: 0
           persist-credentials: false
-      - name: Verify exact helper before execution
+      - name: Checkout immutable bundled-CSS verifier
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: '3c5b3a06e238eac6095f16cfa5ee71012f4ca535'
+          path: trusted
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify immutable helper checkout before executing code
         run: |
-          printf '%s\n' \
-            'b12e14202c1d147a140b12d8487ec7663757929fd7791dd914376ef44244e14c  scripts/security-auto-release.py' \
-            '0399e69ed5525c0d3c5966cb9ba2db8e326d6d6d7f4f05c35091f9e6d5f6a5b8  scripts/security-pilot.py' \
-            | sha256sum --check --status
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '3c5b3a06e238eac6095f16cfa5ee71012f4ca535' candidate "$GITHUB_SHA"
       - name: Reject any activation, application or main drift before running other source code
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/security-auto-release.py guard --repo . --event "$GITHUB_EVENT_PATH"
+        run: python3 trusted/scripts/security-bundled-release.py guard --repo candidate --event "$GITHUB_EVENT_PATH"
       - name: Download immutable prepared candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
@@ -228,15 +232,17 @@ jobs:
           path: rollback
       - name: Validate hashes, source, kind, paths and materialize exact bytes
         run: |
-          python3 scripts/security-auto-release.py extract --bundle fixed/site-bundle.tar --summary fixed/summary.json --kind candidate --source "$GITHUB_SHA" --sha256 "$CANDIDATE_HASH" --out candidate-site
-          python3 scripts/security-auto-release.py extract --bundle rollback/site-bundle.tar --summary rollback/summary.json --kind rollback --source "$ROLLBACK_SOURCE" --sha256 "$ROLLBACK_HASH" --out old-site
+          python3 trusted/scripts/security-bundled-release.py extract --bundle fixed/site-bundle.tar --summary fixed/summary.json --kind candidate --source "$GITHUB_SHA" --sha256 "$CANDIDATE_HASH" --out candidate-site
+          python3 trusted/scripts/security-bundled-release.py extract --bundle rollback/site-bundle.tar --summary rollback/summary.json --kind rollback --source "$ROLLBACK_SOURCE" --sha256 "$ROLLBACK_HASH" --out old-site
       - name: Set up fixed repository Node version
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version-file: .nvmrc
+          node-version-file: trusted/.nvmrc
       - name: Install isolated pinned browser tooling before publication
         run: |
-          python3 scripts/security-pilot-once.py tooling --out "$RUNNER_TEMP/sales-browser"
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '3c5b3a06e238eac6095f16cfa5ee71012f4ca535' candidate "$GITHUB_SHA"
+          python3 trusted/scripts/security-pilot-once.py tooling --out "$RUNNER_TEMP/sales-browser"
           npm ci --prefix "$RUNNER_TEMP/sales-browser" --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
           node "$RUNNER_TEMP/sales-browser/node_modules/playwright-core/cli.js" install --with-deps chromium
           printf 'PLAYWRIGHT_CORE=%s\n' "$RUNNER_TEMP/sales-browser/node_modules/playwright-core/index.mjs" >> "$GITHUB_ENV"
@@ -252,10 +258,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 scripts/security-auto-release.py guard --repo . --event "$GITHUB_EVENT_PATH"
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '3c5b3a06e238eac6095f16cfa5ee71012f4ca535' candidate "$GITHUB_SHA"
+          python3 trusted/scripts/security-bundled-release.py guard --repo candidate --event "$GITHUB_EVENT_PATH"
           allow=rollback
           if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ]; then allow=either; fi
-          python3 scripts/security-auto-release.py known-live --candidate fixed/site-bundle.tar --candidate-summary fixed/summary.json --rollback rollback/site-bundle.tar --rollback-summary rollback/summary.json --allow "$allow"
+          python3 trusted/scripts/security-bundled-release.py known-live --candidate fixed/site-bundle.tar --candidate-summary fixed/summary.json --rollback rollback/site-bundle.tar --rollback-summary rollback/summary.json --allow "$allow"
       - name: Publish exact candidate to Pages
         id: publish
         continue-on-error: true
@@ -267,8 +275,10 @@ jobs:
         if: steps.publish.outcome == 'success'
         continue-on-error: true
         run: |
-          python3 scripts/security-auto-release.py known-live --candidate fixed/site-bundle.tar --candidate-summary fixed/summary.json --rollback rollback/site-bundle.tar --rollback-summary rollback/summary.json --allow candidate --attempts 6 > candidate-http.json
-          node scripts/security-pilot-browser.mjs --site candidate-site --live --phase candidate --out evidence
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '3c5b3a06e238eac6095f16cfa5ee71012f4ca535' candidate "$GITHUB_SHA"
+          python3 trusted/scripts/security-bundled-release.py known-live --candidate fixed/site-bundle.tar --candidate-summary fixed/summary.json --rollback rollback/site-bundle.tar --rollback-summary rollback/summary.json --allow candidate --attempts 6 > candidate-http.json
+          node trusted/scripts/security-bundled-browser.mjs --site candidate-site --live --phase candidate --out evidence
       - name: Retain immutable published candidate record for this successful release attempt
         id: record
         if: steps.check.outcome == 'success'
@@ -292,8 +302,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 scripts/security-auto-release.py guard --repo . --event "$GITHUB_EVENT_PATH"
-          python3 scripts/security-auto-release.py known-live --candidate fixed/site-bundle.tar --candidate-summary fixed/summary.json --rollback rollback/site-bundle.tar --rollback-summary rollback/summary.json --allow either
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '3c5b3a06e238eac6095f16cfa5ee71012f4ca535' candidate "$GITHUB_SHA"
+          python3 trusted/scripts/security-bundled-release.py guard --repo candidate --event "$GITHUB_EVENT_PATH"
+          python3 trusted/scripts/security-bundled-release.py known-live --candidate fixed/site-bundle.tar --candidate-summary fixed/summary.json --rollback rollback/site-bundle.tar --rollback-summary rollback/summary.json --allow either
       - name: Recover exact previously verified live bytes
         id: recovery
         if: always() && !cancelled() && steps.recovery_guard.outcome == 'success'
@@ -306,8 +318,10 @@ jobs:
         if: always() && !cancelled() && steps.recovery.outcome == 'success'
         continue-on-error: true
         run: |
-          python3 scripts/security-auto-release.py known-live --candidate fixed/site-bundle.tar --candidate-summary fixed/summary.json --rollback rollback/site-bundle.tar --rollback-summary rollback/summary.json --allow rollback --attempts 6 > recovery-http.json
-          node scripts/security-pilot-browser.mjs --site old-site --live --phase recovery --out evidence
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '3c5b3a06e238eac6095f16cfa5ee71012f4ca535' candidate "$GITHUB_SHA"
+          python3 trusted/scripts/security-bundled-release.py known-live --candidate fixed/site-bundle.tar --candidate-summary fixed/summary.json --rollback rollback/site-bundle.tar --rollback-summary rollback/summary.json --allow rollback --attempts 6 > recovery-http.json
+          node trusted/scripts/security-bundled-browser.mjs --allow-legacy --site old-site --live --phase recovery --out evidence
       - name: Preserve actual outcomes and never mark failed publication as successful
         if: always()
         env:
