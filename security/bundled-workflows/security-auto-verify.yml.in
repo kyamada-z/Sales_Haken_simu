@@ -1,0 +1,112 @@
+name: Sales automatic dependency verification
+
+on:
+  push:
+    branches: [codex/security-auto-*]
+  pull_request:
+    branches: [main]
+    paths:
+      - package.json
+      - package-lock.json
+      - .github/workflows/pages-auto-release.yml
+      - .github/workflows/security-auto-verify.yml
+      - .github/workflows/security-verify.yml
+      - scripts/security-auto-release.py
+      - scripts/security-auto-release.test.py
+      - vite.config.js
+      - src/styles.css
+      - src/main.jsx
+      - index.html
+      - security/bundled-workflows/**
+      - scripts/security-bundled-*
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sales-auto-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Checkout exact proposed application and activation history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout immutable original policy, browser and tooling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: '@VERIFIER_SHA@'
+          path: trusted
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify immutable helper checkout before executing code
+        run: |
+          printf '%s\n' '12b123ffd3433f7f40ffeb62bde97f7031d40c9a95c4ed82c012489a4f6b62b2  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '@VERIFIER_SHA@' candidate "${{ github.event.pull_request.head.sha || github.sha }}"
+      - name: Set up original pinned Node version
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: trusted/.nvmrc
+      - name: Test immutable policy, browser rejection fixtures and new release boundaries
+        run: |
+          node --test trusted/scripts/security-policy.test.mjs
+          python3 trusted/scripts/security-pilot.test.py
+          node trusted/scripts/security-pilot-browser.mjs --self-test
+          python3 trusted/scripts/security-auto-release.test.py
+          python3 trusted/scripts/security-bundled-release.test.py
+      - name: Enforce exact bootstrap or immutable dependency-only scope
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git -C candidate rev-parse HEAD)
+          base="$PR_BASE"
+          if [ -z "$base" ]; then base=$(git -C candidate merge-base HEAD refs/remotes/origin/main); fi
+          python3 trusted/scripts/security-bundled-release.py assess --repo candidate --base "$base" --head "$head" > scope.json
+          node trusted/scripts/security-bundled-policy.mjs --repo candidate --scope scope.json
+      - name: Install without scripts, require zero audit and build exact proposed source
+        working-directory: candidate
+        env:
+          npm_config_registry: https://registry.npmjs.org
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm audit --json > ../audit.json
+          node --input-type=module -e 'import fs from "node:fs";if(JSON.parse(fs.readFileSync("../audit.json")).metadata.vulnerabilities.total!==0)throw Error("Audit must be zero")'
+          npm run build
+      - name: Recheck trusted helpers and exact candidate working bytes after build
+        run: |
+          printf '%s\n' '12b123ffd3433f7f40ffeb62bde97f7031d40c9a95c4ed82c012489a4f6b62b2  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '@VERIFIER_SHA@' candidate "${{ github.event.pull_request.head.sha || github.sha }}"
+      - name: Install isolated pinned official Chromium tooling
+        run: |
+          python3 trusted/scripts/security-pilot-once.py tooling --out "$RUNNER_TEMP/sales-browser"
+          npm ci --prefix "$RUNNER_TEMP/sales-browser" --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+          node "$RUNNER_TEMP/sales-browser/node_modules/playwright-core/cli.js" install --with-deps chromium
+      - name: Verify calculations, three plots and synthetic report storage in real Chromium
+        env:
+          PLAYWRIGHT_CORE: ${{ runner.temp }}/sales-browser/node_modules/playwright-core/index.mjs
+        run: |
+          printf '%s\n' '12b123ffd3433f7f40ffeb62bde97f7031d40c9a95c4ed82c012489a4f6b62b2  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '@VERIFIER_SHA@' candidate "${{ github.event.pull_request.head.sha || github.sha }}"
+          node trusted/scripts/security-bundled-browser.mjs --site candidate/dist --phase branch-ci --out evidence/desktop
+          node trusted/scripts/security-bundled-browser.mjs --site candidate/dist --phase branch-ci --out evidence/mobile --mobile
+      - name: Retain read-only scope, audit and synthetic browser evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sales-auto-verify-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            scope.json
+            audit.json
+            evidence
+          if-no-files-found: ignore
+          retention-days: 30
