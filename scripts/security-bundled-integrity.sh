@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN
 test "$#" -eq 3
 verifier_expected="$1"
 candidate_repo="$2"
@@ -17,7 +18,7 @@ test -z "$(git -C "$trusted_root" ls-files --others)"
     '7b53111b005ae6aa27d36e18d43f61deb1f6966368c94357dd41ce85f8e797b8  scripts/security-bundled-browser.mjs' \
     '419691870107d3dc65b3bdcb357a9a2054918247e3c97ebcc2f67f59d8118311  scripts/security-bundled-policy.mjs' \
     'da80cb986295780b2fbc9ae4fb419409a232a3507aab9575d5eecd0e2da3f7e4  scripts/security-bundled-release.py' \
-    'df552729b7f03ab3a20857f3bfd7399778f8d70da798a4b659f9305b25062a3b  scripts/security-bundled-release.test.py' \
+    '33b4c6a4feed50e686d7d9dbea5d9bd4bb01d129c60d9f0374a1c37139b8db2c  scripts/security-bundled-release.test.py' \
     '82127328a2d259a794dbe3ef9f2960af43e0e4f08ad5edd9e2173a2976f288c6  scripts/security-pilot-browser.mjs' \
     'a557f7807ef92b04a2b5f8bd97950c870d0f52c70b4b3981dac0346bb0497a93  scripts/security-pilot-once.py' \
     '9e5f8b7b0bdc5417d91912ee8165bce79d7ab89eec9a97bb763abe3fa503af17  scripts/security-pilot-once.test.py' \

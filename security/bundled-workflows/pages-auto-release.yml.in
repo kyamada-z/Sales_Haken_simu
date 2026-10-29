@@ -47,7 +47,7 @@ jobs:
           persist-credentials: false
       - name: Verify immutable helper checkout before executing code
         run: |
-          printf '%s\n' '12b123ffd3433f7f40ffeb62bde97f7031d40c9a95c4ed82c012489a4f6b62b2  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
           bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '@VERIFIER_SHA@' candidate "$GITHUB_SHA"
       - name: Guard exact push, immutable activation tree, scope and current main
         id: scope
@@ -119,7 +119,7 @@ jobs:
           npm run build
       - name: Recheck trusted helpers and exact candidate working bytes after build
         run: |
-          printf '%s\n' '12b123ffd3433f7f40ffeb62bde97f7031d40c9a95c4ed82c012489a4f6b62b2  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
           bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '@VERIFIER_SHA@' candidate "$GITHUB_SHA"
       - name: Install isolated integrity-pinned official Chromium tooling
         run: |
@@ -130,7 +130,7 @@ jobs:
         env:
           PLAYWRIGHT_CORE: ${{ runner.temp }}/sales-browser/node_modules/playwright-core/index.mjs
         run: |
-          printf '%s\n' '12b123ffd3433f7f40ffeb62bde97f7031d40c9a95c4ed82c012489a4f6b62b2  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
           bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '@VERIFIER_SHA@' candidate "$GITHUB_SHA"
           node trusted/scripts/security-bundled-browser.mjs --allow-legacy --site old-site --live --phase rollback --out evidence/known-good
           node trusted/scripts/security-bundled-browser.mjs --site candidate/dist --phase preflight --out evidence/candidate
@@ -138,7 +138,7 @@ jobs:
       - name: Package candidate and record exact immutable bundle identities
         id: identity
         run: |
-          printf '%s\n' '12b123ffd3433f7f40ffeb62bde97f7031d40c9a95c4ed82c012489a4f6b62b2  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
           bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '@VERIFIER_SHA@' candidate "$GITHUB_SHA"
           mkdir -p fixed
           python3 trusted/scripts/security-bundled-release.py pack --site candidate/dist --kind candidate --source "$GITHUB_SHA" --out fixed/site-bundle.tar > fixed/summary.json
@@ -214,7 +214,7 @@ jobs:
           persist-credentials: false
       - name: Verify immutable helper checkout before executing code
         run: |
-          printf '%s\n' '12b123ffd3433f7f40ffeb62bde97f7031d40c9a95c4ed82c012489a4f6b62b2  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
           bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '@VERIFIER_SHA@' candidate "$GITHUB_SHA"
       - name: Reject any activation, application or main drift before running other source code
         env:
@@ -240,7 +240,7 @@ jobs:
           node-version-file: trusted/.nvmrc
       - name: Install isolated pinned browser tooling before publication
         run: |
-          printf '%s\n' '12b123ffd3433f7f40ffeb62bde97f7031d40c9a95c4ed82c012489a4f6b62b2  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
           bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '@VERIFIER_SHA@' candidate "$GITHUB_SHA"
           python3 trusted/scripts/security-pilot-once.py tooling --out "$RUNNER_TEMP/sales-browser"
           npm ci --prefix "$RUNNER_TEMP/sales-browser" --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
@@ -258,7 +258,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          printf '%s\n' '12b123ffd3433f7f40ffeb62bde97f7031d40c9a95c4ed82c012489a4f6b62b2  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
           bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '@VERIFIER_SHA@' candidate "$GITHUB_SHA"
           python3 trusted/scripts/security-bundled-release.py guard --repo candidate --event "$GITHUB_EVENT_PATH"
           allow=rollback
@@ -275,7 +275,7 @@ jobs:
         if: steps.publish.outcome == 'success'
         continue-on-error: true
         run: |
-          printf '%s\n' '12b123ffd3433f7f40ffeb62bde97f7031d40c9a95c4ed82c012489a4f6b62b2  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
           bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '@VERIFIER_SHA@' candidate "$GITHUB_SHA"
           python3 trusted/scripts/security-bundled-release.py known-live --candidate fixed/site-bundle.tar --candidate-summary fixed/summary.json --rollback rollback/site-bundle.tar --rollback-summary rollback/summary.json --allow candidate --attempts 6 > candidate-http.json
           node trusted/scripts/security-bundled-browser.mjs --site candidate-site --live --phase candidate --out evidence
@@ -302,7 +302,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          printf '%s\n' '12b123ffd3433f7f40ffeb62bde97f7031d40c9a95c4ed82c012489a4f6b62b2  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
           bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '@VERIFIER_SHA@' candidate "$GITHUB_SHA"
           python3 trusted/scripts/security-bundled-release.py guard --repo candidate --event "$GITHUB_EVENT_PATH"
           python3 trusted/scripts/security-bundled-release.py known-live --candidate fixed/site-bundle.tar --candidate-summary fixed/summary.json --rollback rollback/site-bundle.tar --rollback-summary rollback/summary.json --allow either
@@ -318,7 +318,7 @@ jobs:
         if: always() && !cancelled() && steps.recovery.outcome == 'success'
         continue-on-error: true
         run: |
-          printf '%s\n' '12b123ffd3433f7f40ffeb62bde97f7031d40c9a95c4ed82c012489a4f6b62b2  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
           bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '@VERIFIER_SHA@' candidate "$GITHUB_SHA"
           python3 trusted/scripts/security-bundled-release.py known-live --candidate fixed/site-bundle.tar --candidate-summary fixed/summary.json --rollback rollback/site-bundle.tar --rollback-summary rollback/summary.json --allow rollback --attempts 6 > recovery-http.json
           node trusted/scripts/security-bundled-browser.mjs --allow-legacy --site old-site --live --phase recovery --out evidence

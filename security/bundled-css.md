@@ -54,3 +54,7 @@ still match its exact commit; only owned node_modules/ and dist/ generated files
 may be untracked. PYTHONDONTWRITEBYTECODE=1 prevents trusted cache generation.
 This detects unexpected working-tree changes; it does not claim complete process
 isolation against malicious dependency code running in the same runner.
+
+The integrity subprocess unsets GH_TOKEN, GITHUB_TOKEN and GH_ENTERPRISE_TOKEN
+before any external command, while the calling API-guard step retains its
+read-only token. A real-shell fake-Git regression verifies this boundary.

@@ -161,6 +161,24 @@ class GitBoundaries(unittest.TestCase):
         result=subprocess.check_output(["bash","--noprofile","--norc","-e","-o","pipefail","-c",script],cwd=self.repo.parent,env=env,stderr=subprocess.PIPE,text=True)
         self.assertTrue(json.loads(result)["integrity"])
 
+    def test_shell_guard_strips_read_tokens_before_any_git_child(self):
+        folder=self.repo.parent/"token-check-bin";folder.mkdir();wrapper=folder/"git";log=self.repo.parent/"git-child-token-checks.jsonl"
+        real_git=shutil.which("git")
+        wrapper.write_text(f"#!{sys.executable}\n"+"\n".join([
+            "import json,os,sys", "keys=['GH_TOKEN','GITHUB_TOKEN','GH_ENTERPRISE_TOKEN']",
+            "present=[key for key in keys if key in os.environ]",
+            "with open(os.environ['SYNTHETIC_GIT_TOKEN_LOG'],'a') as f:f.write(json.dumps(present)+'\\n')",
+            "if present:sys.exit(92)", f"os.execv({real_git!r},[{real_git!r}]+sys.argv[1:])", ""]))
+        wrapper.chmod(0o755)
+        env={**os.environ,"PATH":str(folder)+os.pathsep+os.environ["PATH"],"SYNTHETIC_GIT_TOKEN_LOG":str(log),"PYTHONDONTWRITEBYTECODE":"1"}
+        tokens={key:"synthetic-read-only-token" for key in ["GH_TOKEN","GITHUB_TOKEN","GH_ENTERPRISE_TOKEN"]};env.update(tokens)
+        args=["bash","--noprofile","--norc",str(auto.TRUSTED_ROOT/"scripts/security-bundled-integrity.sh"),self.verifier,str(self.repo),self.activation]
+        result=subprocess.check_output(args,env=env,text=True,stderr=subprocess.PIPE)
+        self.assertTrue(json.loads(result)["integrity"])
+        values=[json.loads(line) for line in log.read_text().splitlines()]
+        self.assertGreaterEqual(len(values),4);self.assertTrue(all(value==[] for value in values))
+        self.assertTrue(all(env[key]==value for key,value in tokens.items()))
+
     def test_wrong_workflow_and_run_attempt_are_rejected(self):
         head=self.dependency();env=self.env(head);env["GITHUB_WORKFLOW_SHA"]="b"*40
         with self.assertRaisesRegex(ValueError,"Workflow identity"):auto.event_guard(self.event(self.activation,head),env,self.repo)

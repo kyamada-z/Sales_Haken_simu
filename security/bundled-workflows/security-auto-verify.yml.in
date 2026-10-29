@@ -50,7 +50,7 @@ jobs:
           persist-credentials: false
       - name: Verify immutable helper checkout before executing code
         run: |
-          printf '%s\n' '12b123ffd3433f7f40ffeb62bde97f7031d40c9a95c4ed82c012489a4f6b62b2  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
           bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '@VERIFIER_SHA@' candidate "${{ github.event.pull_request.head.sha || github.sha }}"
       - name: Set up original pinned Node version
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -84,7 +84,7 @@ jobs:
           npm run build
       - name: Recheck trusted helpers and exact candidate working bytes after build
         run: |
-          printf '%s\n' '12b123ffd3433f7f40ffeb62bde97f7031d40c9a95c4ed82c012489a4f6b62b2  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
           bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '@VERIFIER_SHA@' candidate "${{ github.event.pull_request.head.sha || github.sha }}"
       - name: Install isolated pinned official Chromium tooling
         run: |
@@ -95,7 +95,7 @@ jobs:
         env:
           PLAYWRIGHT_CORE: ${{ runner.temp }}/sales-browser/node_modules/playwright-core/index.mjs
         run: |
-          printf '%s\n' '12b123ffd3433f7f40ffeb62bde97f7031d40c9a95c4ed82c012489a4f6b62b2  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
           bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '@VERIFIER_SHA@' candidate "${{ github.event.pull_request.head.sha || github.sha }}"
           node trusted/scripts/security-bundled-browser.mjs --site candidate/dist --phase branch-ci --out evidence/desktop
           node trusted/scripts/security-bundled-browser.mjs --site candidate/dist --phase branch-ci --out evidence/mobile --mobile
