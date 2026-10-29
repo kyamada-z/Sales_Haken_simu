@@ -1,0 +1,29 @@
+{
+  "schema": "sales-bundled-bootstrap/v1",
+  "initialMain": "2b1ed2a0b7875375facd755e704d5c410b9a23ff",
+  "appSourceTree": "6fdb64837c957c089b2fdc905c58c6de1d1a5dae",
+  "runtimeChanges": [
+    "package.json",
+    "package-lock.json",
+    "index.html",
+    "src/main.jsx",
+    "src/styles.css",
+    "vite.config.js"
+  ],
+  "businessSourceUnchanged": "src/App.jsx",
+  "frozenVerifierRule": "immutable verifier HEAD supplies all tracked modes/blobs; workflow templates replace @VERIFIER_SHA@ with that external HEAD; future only two package files may differ",
+  "newHelpers": {
+    "scripts/security-bundled-artifact.py": "56a2b2e7570fe351f13e5b33c90315060d46e1a8dbbdf9d93781cdf015d29e58",
+    "scripts/security-bundled-release.py": "da80cb986295780b2fbc9ae4fb419409a232a3507aab9575d5eecd0e2da3f7e4",
+    "scripts/security-bundled-policy.mjs": "419691870107d3dc65b3bdcb357a9a2054918247e3c97ebcc2f67f59d8118311",
+    "scripts/security-bundled-browser.mjs": "7b53111b005ae6aa27d36e18d43f61deb1f6966368c94357dd41ce85f8e797b8",
+    "scripts/security-bundled-release.test.py": "33b4c6a4feed50e686d7d9dbea5d9bd4bb01d129c60d9f0374a1c37139b8db2c",
+    "scripts/security-bundled-integrity.sh": "2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9"
+  },
+  "historicalBrowserSha256": "82127328a2d259a794dbe3ef9f2960af43e0e4f08ad5edd9e2173a2976f288c6",
+  "previousPages": {
+    "source": "2b173dc67dcddcaf7e6f0c354bbb08b123675a28",
+    "index.html": "8de3cc6d270447c04532dc378ad5b0530acdad4d2d583a5c924e1922e0f0c113",
+    "assets/index-DMZCvFzF.js": "45bdedc266a05dfabc943c22022bd73f09f2eadebcea4a744547e78f5288b5af"
+  }
+}

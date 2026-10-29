@@ -13,6 +13,12 @@ on:
       - .github/workflows/security-verify.yml
       - scripts/security-auto-release.py
       - scripts/security-auto-release.test.py
+      - vite.config.js
+      - src/styles.css
+      - src/main.jsx
+      - index.html
+      - security/bundled-workflows/**
+      - scripts/security-bundled-*
 
 permissions:
   contents: read
@@ -25,6 +31,8 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - name: Checkout exact proposed application and activation history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -36,16 +44,14 @@ jobs:
       - name: Checkout immutable original policy, browser and tooling
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 8a918ea18fc42d5312d840e1c8706b2b07f26a05
+          ref: '3c5b3a06e238eac6095f16cfa5ee71012f4ca535'
           path: trusted
+          fetch-depth: 0
           persist-credentials: false
-      - name: Verify exact release helper and original archive primitive before execution
+      - name: Verify immutable helper checkout before executing code
         run: |
-          printf '%s\n' \
-            'b12e14202c1d147a140b12d8487ec7663757929fd7791dd914376ef44244e14c  candidate/scripts/security-auto-release.py' \
-            'fec605dcc49eb92caac8dda4f6d7900440cdf06a8a57e887917fca21ea692965  candidate/scripts/security-auto-release.test.py' \
-            '0399e69ed5525c0d3c5966cb9ba2db8e326d6d6d7f4f05c35091f9e6d5f6a5b8  candidate/scripts/security-pilot.py' \
-            | sha256sum --check --status
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '3c5b3a06e238eac6095f16cfa5ee71012f4ca535' candidate "${{ github.event.pull_request.head.sha || github.sha }}"
       - name: Set up original pinned Node version
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -55,8 +61,9 @@ jobs:
           node --test trusted/scripts/security-policy.test.mjs
           python3 trusted/scripts/security-pilot.test.py
           node trusted/scripts/security-pilot-browser.mjs --self-test
-          python3 candidate/scripts/security-auto-release.test.py
-      - name: Enforce activation ancestry and dependency-only same-major policy
+          python3 trusted/scripts/security-auto-release.test.py
+          python3 trusted/scripts/security-bundled-release.test.py
+      - name: Enforce exact bootstrap or immutable dependency-only scope
         env:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
@@ -64,18 +71,8 @@ jobs:
           head=$(git -C candidate rev-parse HEAD)
           base="$PR_BASE"
           if [ -z "$base" ]; then base=$(git -C candidate merge-base HEAD refs/remotes/origin/main); fi
-          python3 candidate/scripts/security-auto-release.py assess --repo candidate --base "$base" --head "$head" --allow-setup > scope.json
-          POLICY_BASE="$base" POLICY_HEAD="$head" node --input-type=module <<'JS'
-          import {execFileSync} from 'node:child_process';
-          import {pathToFileURL} from 'node:url';
-          const {validateManifestChange,validateLockfile}=await import(pathToFileURL(process.cwd()+'/trusted/scripts/security-policy.mjs'));
-          const read=(sha,path)=>JSON.parse(execFileSync('git',['-C','candidate','show',`${sha}:${path}`],{encoding:'utf8'}));
-          for(const base of ['8a918ea18fc42d5312d840e1c8706b2b07f26a05',process.env.POLICY_BASE]) {
-            validateManifestChange(read(base,'package.json'),read(process.env.POLICY_HEAD,'package.json'));
-            validateLockfile(read(base,'package.json'),read(process.env.POLICY_HEAD,'package.json'),read(base,'package-lock.json'),read(process.env.POLICY_HEAD,'package-lock.json'));
-          }
-          console.log('Immutable original same-major policy passed against trusted baseline and current PR/main base.');
-          JS
+          python3 trusted/scripts/security-bundled-release.py assess --repo candidate --base "$base" --head "$head" > scope.json
+          node trusted/scripts/security-bundled-policy.mjs --repo candidate --scope scope.json
       - name: Install without scripts, require zero audit and build exact proposed source
         working-directory: candidate
         env:
@@ -85,6 +82,10 @@ jobs:
           npm audit --json > ../audit.json
           node --input-type=module -e 'import fs from "node:fs";if(JSON.parse(fs.readFileSync("../audit.json")).metadata.vulnerabilities.total!==0)throw Error("Audit must be zero")'
           npm run build
+      - name: Recheck trusted helpers and exact candidate working bytes after build
+        run: |
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '3c5b3a06e238eac6095f16cfa5ee71012f4ca535' candidate "${{ github.event.pull_request.head.sha || github.sha }}"
       - name: Install isolated pinned official Chromium tooling
         run: |
           python3 trusted/scripts/security-pilot-once.py tooling --out "$RUNNER_TEMP/sales-browser"
@@ -93,7 +94,11 @@ jobs:
       - name: Verify calculations, three plots and synthetic report storage in real Chromium
         env:
           PLAYWRIGHT_CORE: ${{ runner.temp }}/sales-browser/node_modules/playwright-core/index.mjs
-        run: node trusted/scripts/security-pilot-browser.mjs --site candidate/dist --phase branch-ci --out evidence
+        run: |
+          printf '%s\n' '2886109db9745249bfec56b183152c4e8f7bc17c67b20c787ae672bc018b34e9  trusted/scripts/security-bundled-integrity.sh' | sha256sum --check --status
+          bash --noprofile --norc trusted/scripts/security-bundled-integrity.sh '3c5b3a06e238eac6095f16cfa5ee71012f4ca535' candidate "${{ github.event.pull_request.head.sha || github.sha }}"
+          node trusted/scripts/security-bundled-browser.mjs --site candidate/dist --phase branch-ci --out evidence/desktop
+          node trusted/scripts/security-bundled-browser.mjs --site candidate/dist --phase branch-ci --out evidence/mobile --mobile
       - name: Retain read-only scope, audit and synthetic browser evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
