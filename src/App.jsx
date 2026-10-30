@@ -4,6 +4,9 @@ import {
 } from 'recharts';
 import { Calculator, Info, TrendingUp, Users, DollarSign, Sparkles, Loader2, Save, MessageCircle, Send, History, Trash2, Clock, Check } from 'lucide-react';
 
+import ProfitOverview from './ProfitOverview';
+import { calculateSimulation, DEFAULT_PARAMS, normalizeParams } from './simulation';
+
 const apiKey = "";
 
 // Gemini API呼び出し関数（対話履歴を配列で受け取れるように改修）
@@ -39,79 +42,6 @@ const callGeminiAPI = async (contents) => {
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
-};
-
-// --- 計算ロジック (Model) ---
-const calculateSimulation = (params) => {
-  const { initialUsers, unitPrice, churnRate, newUsersPerMonth, directPayRate, socialInsuranceRate, months } = params;
-  
-  let monthlyData = [];
-  let currentExistingUsers = initialUsers;
-  let currentNewUsers = 0;
-  
-  let totalExistingRevenue = 0;
-  let totalNewRevenue = 0;
-  let totalNewTheoreticalRevenue = 0;
-
-  for (let month = 1; month <= months; month++) {
-    currentExistingUsers = currentExistingUsers * (1 - churnRate);
-    const existingRevenue = currentExistingUsers * unitPrice;
-    totalExistingRevenue += existingRevenue;
-
-    const existingTheoreticalUsers = initialUsers;
-    const existingTheoreticalRevenue = existingTheoreticalUsers * unitPrice;
-    const existingLostRevenue = existingTheoreticalRevenue - existingRevenue;
-
-    currentNewUsers = (currentNewUsers + newUsersPerMonth) * (1 - churnRate);
-    const newRevenue = currentNewUsers * unitPrice;
-    totalNewRevenue += newRevenue;
-
-    const newTheoreticalUsers = month * newUsersPerMonth;
-    const newTheoreticalRevenue = newTheoreticalUsers * unitPrice;
-    totalNewTheoreticalRevenue += newTheoreticalRevenue;
-    const newLostRevenue = newTheoreticalRevenue - newRevenue;
-
-    monthlyData.push({
-      month: `${month}ヶ月目`,
-      existingUsers: currentExistingUsers,
-      existingRevenue,
-      existingTheoreticalRevenue,
-      existingLostRevenue,
-      newUsers: currentNewUsers,
-      newRevenue,
-      newTheoreticalRevenue,
-      newLostRevenue,
-      totalUsers: currentExistingUsers + currentNewUsers,
-      totalRevenue: existingRevenue + newRevenue,
-      cost: (existingRevenue + newRevenue) * (directPayRate + socialInsuranceRate),
-    });
-  }
-
-  const initialARR = initialUsers * unitPrice * 12;
-  const existingTheoreticalPeriodRevenue = initialUsers * unitPrice * months;
-  const existingChurnLoss = existingTheoreticalPeriodRevenue - totalExistingRevenue;
-  const newChurnLoss = totalNewTheoreticalRevenue - totalNewRevenue;
-  const totalRevenue = totalExistingRevenue + totalNewRevenue;
-  const finalUsers = monthlyData.length > 0 ? monthlyData[months - 1].totalUsers : initialUsers;
-  const endingARR = finalUsers * unitPrice * 12;
-
-  return {
-    monthlyData,
-    finalUsers,
-    plMetrics: {
-      initialARR,
-      existingTheoreticalPeriodRevenue,
-      existingChurnLoss,
-      existingRevenue: totalExistingRevenue,
-      newTheoreticalPeriodRevenue: totalNewTheoreticalRevenue,
-      newChurnLoss,
-      newRevenue: totalNewRevenue,
-      totalRevenue,
-    },
-    saasMetrics: {
-      endingARR,
-    }
-  };
 };
 
 const formatCurrency = (value) => new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY', maximumFractionDigits: 0 }).format(value);
@@ -150,15 +80,8 @@ const MetricCard = ({ title, value, description, type = 'default' }) => {
 };
 
 export default function App() {
-  const [params, setParams] = useState({
-    initialUsers: 530,
-    unitPrice: 280000,
-    churnRate: 0.055,
-    newUsersPerMonth: 33,
-    directPayRate: 0.7499,
-    socialInsuranceRate: 0.1027,
-    months: 12,
-  });
+  const [params, setParams] = useState({ ...DEFAULT_PARAMS });
+  const [baselineParams, setBaselineParams] = useState(null);
 
   // AIレポート＆チャット関連のステート
   const [aiReport, setAiReport] = useState("");
@@ -178,15 +101,19 @@ export default function App() {
 
   const result = useMemo(() => calculateSimulation(params), [params]);
 
+  const baseline = useMemo(() => baselineParams ? {
+    params: baselineParams,
+    result: calculateSimulation(baselineParams),
+  } : null, [baselineParams]);
+
   // ローカルストレージから保存済みレポートを読み込む
   useEffect(() => {
-    const saved = localStorage.getItem('simulationSavedReports');
-    if (saved) {
-      try {
-        setSavedReports(JSON.parse(saved));
-      } catch (e) {
-        console.error("Failed to load saved reports", e);
-      }
+    try {
+      const saved = localStorage.getItem('simulationSavedReports');
+      const reports = saved ? JSON.parse(saved) : [];
+      if (Array.isArray(reports)) setSavedReports(reports);
+    } catch (e) {
+      console.error("Failed to load saved reports", e);
     }
   }, []);
 
@@ -198,7 +125,7 @@ export default function App() {
   }, [chatMessages, isChatting]);
 
   const handleParamChange = (key, value) => {
-    setParams(prev => ({ ...prev, [key]: parseFloat(value) || 0 }));
+    setParams(prev => normalizeParams({ ...prev, [key]: value }));
     // パラメータが変わったら未保存状態にする
     setIsSavedDone(false);
   };
@@ -219,9 +146,16 @@ export default function App() {
 - 月間単価: ${formatCurrency(params.unitPrice)}
 - 月間退職率: ${params.churnRate * 100}%
 - 月間新規開始数: ${params.newUsersPerMonth}人
+- 直給率（対売上）: ${(params.directPayRate * 100).toFixed(2)}%
+- 社保率（対売上）: ${(params.socialInsuranceRate * 100).toFixed(2)}%
+- 全期間で費用率を固定。単価変更時も直給費・社保費は売上に比例します。その他経費は含みません。
 
 【シミュレーション結果（${params.months}ヶ月累計）】
 - 期間予測 総売上: ${formatCurrency(result.plMetrics.totalRevenue)}
+- 直給費: ${formatCurrency(result.plMetrics.directPayCost)}
+- 社保費: ${formatCurrency(result.plMetrics.socialInsuranceCost)}
+- 粗利（社保引き後）: ${formatCurrency(result.plMetrics.grossProfit)}
+- 粗利率（社保引き後）: ${(result.plMetrics.grossMargin * 100).toFixed(2)}%
 - 既存顧客からの退職減収 (機会損失): ${formatCurrency(result.plMetrics.existingChurnLoss)}
 - 新規顧客からの退職減収 (機会損失): ${formatCurrency(result.plMetrics.newChurnLoss)}
 - 最終月末の総稼働見込: ${formatNumber(result.finalUsers)}人
@@ -301,7 +235,7 @@ export default function App() {
 
   const loadSavedReport = (report) => {
     if (window.confirm("現在のシミュレーション状態を上書きして、保存されたレポートを復元しますか？")) {
-      setParams(report.params);
+      setParams(normalizeParams(report.params));
       setAiReport(report.reportContent);
       setInitialPrompt(report.initialPrompt);
       setChatMessages(report.chatMessages || []);
@@ -332,10 +266,10 @@ export default function App() {
           <div>
             <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
               <Calculator className="w-6 h-6 text-blue-600" />
-              派遣売上シミュレーション
+              派遣売上・粗利シミュレーション
             </h1>
             <p className="text-gray-500 mt-1 text-sm">
-              派遣事業の売上をSaaSのPL（損益計算書）になぞらえ、「既存顧客からの売上」と「新規顧客からの売上」に分解して任意の期間で予測します。
+              人数・単価・退職率と費用率から、指定期間の売上と粗利（社保引き後）を試算します。
             </p>
           </div>
         </div>
@@ -348,12 +282,12 @@ export default function App() {
               <h2 className="text-lg font-semibold border-b pb-3 mb-4">前提条件</h2>
               <div className="space-y-4">
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1 text-blue-600">シミュレーション期間 (ヶ月)</label>
-                  <input type="number" value={params.months} onChange={(e) => handleParamChange('months', e.target.value)} min="1" max="120" className="w-full p-2 border rounded-md bg-blue-50 text-right focus:ring-2 focus:ring-blue-500 font-bold text-blue-700" />
+                  <label htmlFor="months" className="block text-xs font-medium text-gray-500 mb-1 text-blue-600">シミュレーション期間 (ヶ月)</label>
+                  <input id="months" type="number" value={params.months} onChange={(e) => handleParamChange('months', e.target.value)} min="1" max="120" className="w-full p-2 border rounded-md bg-blue-50 text-right focus:ring-2 focus:ring-blue-500 font-bold text-blue-700" />
                 </div>
                 <div className="pt-3 border-t">
                   <div className="flex items-center gap-1 mb-1 group relative">
-                    <label className="block text-xs font-medium text-gray-500">期初継続稼働数 (人)</label>
+                    <label htmlFor="initialUsers" className="block text-xs font-medium text-gray-500">期初継続稼働数 (人)</label>
                     <Info className="w-3.5 h-3.5 text-gray-400 cursor-help" />
                     <div className="absolute hidden group-hover:block bg-gray-900 text-white text-xs p-3 rounded-lg bottom-full left-0 mb-2 w-56 z-20 shadow-xl pointer-events-none font-normal leading-relaxed whitespace-normal">
                       再配予定の稼働者を含みます。<br/>
@@ -363,28 +297,33 @@ export default function App() {
                       <div className="absolute -bottom-1 left-20 w-2 h-2 bg-gray-900 rotate-45"></div>
                     </div>
                   </div>
-                  <input type="number" value={params.initialUsers} onChange={(e) => handleParamChange('initialUsers', e.target.value)} className="w-full p-2 border rounded-md bg-gray-50 text-right focus:ring-2 focus:ring-blue-500" />
+                  <input id="initialUsers" type="number" min="0" value={params.initialUsers} onChange={(e) => handleParamChange('initialUsers', e.target.value)} className="w-full p-2 border rounded-md bg-gray-50 text-right focus:ring-2 focus:ring-blue-500" />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">月間単価 (円)</label>
-                  <input type="number" value={params.unitPrice} onChange={(e) => handleParamChange('unitPrice', e.target.value)} step="10000" className="w-full p-2 border rounded-md bg-gray-50 text-right focus:ring-2 focus:ring-blue-500" />
+                  <label htmlFor="unitPrice" className="block text-xs font-medium text-gray-500 mb-1">月間単価 (円)</label>
+                  <input id="unitPrice" type="number" min="0" value={params.unitPrice} onChange={(e) => handleParamChange('unitPrice', e.target.value)} step="10000" className="w-full p-2 border rounded-md bg-gray-50 text-right focus:ring-2 focus:ring-blue-500" />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">月間退職率 (%)</label>
-                  <input type="number" value={params.churnRate * 100} onChange={(e) => handleParamChange('churnRate', e.target.value / 100)} step="0.1" className="w-full p-2 border rounded-md bg-gray-50 text-right focus:ring-2 focus:ring-blue-500" />
+                  <label htmlFor="churnRate" className="block text-xs font-medium text-gray-500 mb-1">月間退職率 (%)</label>
+                  <input id="churnRate" type="number" min="0" max="100" value={Number((params.churnRate * 100).toFixed(4))} onChange={(e) => handleParamChange('churnRate', e.target.value / 100)} step="0.1" className="w-full p-2 border rounded-md bg-gray-50 text-right focus:ring-2 focus:ring-blue-500" />
                   <p className="text-[10px] text-gray-400 mt-1">※新規開始者も初月からこの率で退職する前提です</p>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">月間新規開始数 (人)</label>
-                  <input type="number" value={params.newUsersPerMonth} onChange={(e) => handleParamChange('newUsersPerMonth', e.target.value)} className="w-full p-2 border rounded-md bg-gray-50 text-right focus:ring-2 focus:ring-blue-500" />
+                  <label htmlFor="newUsersPerMonth" className="block text-xs font-medium text-gray-500 mb-1">月間新規開始数 (人)</label>
+                  <input id="newUsersPerMonth" type="number" min="0" value={params.newUsersPerMonth} onChange={(e) => handleParamChange('newUsersPerMonth', e.target.value)} className="w-full p-2 border rounded-md bg-gray-50 text-right focus:ring-2 focus:ring-blue-500" />
                 </div>
                 <div className="pt-3 border-t">
-                  <label className="block text-xs font-medium text-gray-500 mb-1">直給率 (%)</label>
-                  <input type="number" value={params.directPayRate * 100} onChange={(e) => handleParamChange('directPayRate', e.target.value / 100)} step="0.01" className="w-full p-2 border rounded-md bg-gray-50 text-right focus:ring-2 focus:ring-blue-500" />
+                  <label htmlFor="directPayRate" className="block text-xs font-medium text-gray-500 mb-1">直給率 (%)</label>
+                  <input id="directPayRate" type="number" min="0" max="100" value={Number((params.directPayRate * 100).toFixed(4))} onChange={(e) => handleParamChange('directPayRate', e.target.value / 100)} step="0.01" className="w-full p-2 border rounded-md bg-gray-50 text-right focus:ring-2 focus:ring-blue-500" />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">対売上社保率 (%)</label>
-                  <input type="number" value={params.socialInsuranceRate * 100} onChange={(e) => handleParamChange('socialInsuranceRate', e.target.value / 100)} step="0.01" className="w-full p-2 border rounded-md bg-gray-50 text-right focus:ring-2 focus:ring-blue-500" />
+                  <label htmlFor="socialInsuranceRate" className="block text-xs font-medium text-gray-500 mb-1">対売上社保率 (%)</label>
+                  <input id="socialInsuranceRate" type="number" min="0" max="100" value={Number((params.socialInsuranceRate * 100).toFixed(4))} onChange={(e) => handleParamChange('socialInsuranceRate', e.target.value / 100)} step="0.01" className="w-full p-2 border rounded-md bg-gray-50 text-right focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div className={`rounded-lg p-3 ${result.plMetrics.grossMargin < 0 ? 'bg-red-50 text-red-800' : 'bg-teal-50 text-teal-800'}`}>
+                  <p className="text-xs font-medium">粗利率（社保引き後）</p>
+                  <p className="text-2xl font-bold">{(result.plMetrics.grossMargin * 100).toFixed(2)}%</p>
+                  <p className="mt-1 text-xs leading-relaxed">100% − 直給率 − 対売上社保率<br />両方とも売上に対する率です。</p>
                 </div>
               </div>
             </div>
@@ -432,7 +371,18 @@ export default function App() {
           </div>
 
           {/* 右メイン: 結果表示 */}
-          <div className="lg:col-span-9 space-y-6">
+          <div className="lg:col-span-9 min-w-0 space-y-6">
+            <ProfitOverview
+              params={params}
+              result={result}
+              baseline={baseline}
+              onRecordBaseline={() => setBaselineParams({ ...params })}
+              onRestoreBaseline={() => { setParams({ ...baselineParams }); setIsSavedDone(false); }}
+              onClearBaseline={() => setBaselineParams(null)}
+            />
+            <details className="rounded-xl border border-gray-200 bg-white p-4">
+              <summary className="cursor-pointer font-semibold text-gray-700">売上の内訳・退職の影響・稼働人数を詳しく見る</summary>
+              <div className="mt-4 space-y-6">
             
             <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
               <div className="flex justify-between items-center mb-4">
@@ -442,7 +392,7 @@ export default function App() {
                 </h3>
               </div>
               <p className="text-sm text-gray-500 mb-5">
-                退職者が0人だった場合の「理論売上」から、退職によって失われた「機会損失（減収）」を差し引いて、最終的な「実績売上」を算出しています。
+                退職者が0人だった場合の「理論売上」から、退職によって失われた「機会損失（減収）」を差し引いて、最終的な「予測売上」を算出しています。
               </p>
 
               <div className="flex flex-col gap-4">
@@ -453,7 +403,7 @@ export default function App() {
                     <div className="text-xl font-bold text-gray-400">－</div>
                     <MetricCard title="退職による減収 (Churn)" value={formatCurrency(result.plMetrics.existingChurnLoss)} type="danger" description="退職によって得られなくなった機会損失の合計額" />
                     <div className="text-xl font-bold text-gray-400">＝</div>
-                    <MetricCard title="期間実績売上" value={formatCurrency(result.plMetrics.existingRevenue)} type="primary" description="既存顧客からの実際の売上着地見込" />
+                    <MetricCard title="期間予測売上" value={formatCurrency(result.plMetrics.existingRevenue)} type="primary" description="既存顧客からの実際の売上着地見込" />
                   </div>
                 </div>
 
@@ -464,7 +414,7 @@ export default function App() {
                     <div className="text-xl font-bold text-gray-400">－</div>
                     <MetricCard title="退職による減収 (Churn)" value={formatCurrency(result.plMetrics.newChurnLoss)} type="danger" description="新規獲得した顧客が早期退職したことによる機会損失" />
                     <div className="text-xl font-bold text-gray-400">＝</div>
-                    <MetricCard title="期間実績売上" value={formatCurrency(result.plMetrics.newRevenue)} type="success" description="新規顧客からの実際の売上着地見込" />
+                    <MetricCard title="期間予測売上" value={formatCurrency(result.plMetrics.newRevenue)} type="success" description="新規顧客からの実際の売上着地見込" />
                   </div>
                 </div>
 
@@ -508,7 +458,7 @@ export default function App() {
                       <YAxis tickFormatter={yAxisFormatter} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#9CA3AF' }} />
                       <RechartsTooltip formatter={(value) => [formatCurrency(value), '']} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
                       <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} iconType="circle" />
-                      <Bar dataKey="existingRevenue" name="実績売上" stackId="a" fill="#3B82F6" radius={[0, 0, 4, 4]} />
+                      <Bar dataKey="existingRevenue" name="予測売上" stackId="a" fill="#3B82F6" radius={[0, 0, 4, 4]} />
                       <Bar dataKey="existingLostRevenue" name="失われた売上(退職)" stackId="a" fill="#FECACA" radius={[4, 4, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
@@ -528,7 +478,7 @@ export default function App() {
                       <YAxis tickFormatter={yAxisFormatter} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#9CA3AF' }} />
                       <RechartsTooltip formatter={(value) => [formatCurrency(value), '']} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
                       <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} iconType="circle" />
-                      <Bar dataKey="newRevenue" name="実績売上" stackId="a" fill="#10B981" radius={[0, 0, 4, 4]} />
+                      <Bar dataKey="newRevenue" name="予測売上" stackId="a" fill="#10B981" radius={[0, 0, 4, 4]} />
                       <Bar dataKey="newLostRevenue" name="失われた売上(退職)" stackId="a" fill="#FECACA" radius={[4, 4, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
@@ -554,18 +504,27 @@ export default function App() {
               </div>
             </div>
 
+              </div>
+            </details>
+
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+              <h2 className="px-5 pt-5 text-lg font-semibold">月別の売上・費用・粗利</h2>
+              <p className="px-5 py-2 text-xs text-gray-500">金額は円単位で表示しています。累計は丸める前の数値で計算するため、表示額の合計と数円ずれる場合があります。横にスクロールして全項目を確認できます。</p>
               <div className="overflow-x-auto">
-                <table className="w-full text-sm text-right">
+                <table className="w-full text-sm text-right whitespace-nowrap">
+                  <caption className="sr-only">各月の稼働人数、売上、直給費、社保費、粗利（社保引き後）</caption>
                   <thead className="bg-gray-50 text-gray-500 font-medium border-b">
                     <tr>
                       <th className="px-4 py-3 text-left">月</th>
                       <th className="px-4 py-3">既存稼働数</th>
                       <th className="px-4 py-3">新規稼働数</th>
                       <th className="px-4 py-3 text-blue-600">総稼働数</th>
-                      <th className="px-4 py-3">既存実績売上</th>
-                      <th className="px-4 py-3">新規実績売上</th>
+                      <th className="px-4 py-3">既存予測売上</th>
+                      <th className="px-4 py-3">新規予測売上</th>
                       <th className="px-4 py-3 font-bold text-gray-900">当月売上合計</th>
+                      <th className="px-4 py-3">直給費</th>
+                      <th className="px-4 py-3">社保費</th>
+                      <th className="px-4 py-3 text-teal-700">粗利（社保引き後）</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -578,6 +537,9 @@ export default function App() {
                         <td className="px-4 py-3 text-gray-600">{formatCurrency(row.existingRevenue)}</td>
                         <td className="px-4 py-3 text-gray-600">{formatCurrency(row.newRevenue)}</td>
                         <td className="px-4 py-3 font-bold text-gray-900">{formatCurrency(row.totalRevenue)}</td>
+                        <td className="px-4 py-3 text-gray-600">{formatCurrency(row.directPayCost)}</td>
+                        <td className="px-4 py-3 text-gray-600">{formatCurrency(row.socialInsuranceCost)}</td>
+                        <td className={`px-4 py-3 font-bold ${row.grossProfit < 0 ? 'text-red-700' : 'text-teal-700'}`}>{formatCurrency(row.grossProfit)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -587,6 +549,9 @@ export default function App() {
                       <td className="px-4 py-4 text-blue-700">{formatCurrency(result.plMetrics.existingRevenue)}</td>
                       <td className="px-4 py-4 text-green-700">{formatCurrency(result.plMetrics.newRevenue)}</td>
                       <td className="px-4 py-4 text-purple-700">{formatCurrency(result.plMetrics.totalRevenue)}</td>
+                      <td className="px-4 py-4">{formatCurrency(result.plMetrics.directPayCost)}</td>
+                      <td className="px-4 py-4">{formatCurrency(result.plMetrics.socialInsuranceCost)}</td>
+                      <td className={`px-4 py-4 ${result.plMetrics.grossProfit < 0 ? 'text-red-700' : 'text-teal-700'}`}>{formatCurrency(result.plMetrics.grossProfit)}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -727,3 +692,4 @@ export default function App() {
     </div>
   );
 }
+
