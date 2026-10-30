@@ -1,0 +1,363 @@
+name: Sales authorized gross-profit feature release
+
+# Exactly one approved main transition. The dependency-only release stays unchanged.
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/profit-release-once.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+  RELEASE_TOOLS_SHA: '47d3a7abd4c6c053c8394e52e3538404709deb77'
+  FEATURE_SHA: '1ed7dff5bdc9c5e4018c26584b07fa15b40accf2'
+
+jobs:
+  prepare:
+    if: github.repository == 'kyamada-z/Sales_Haken_simu' && github.ref == 'refs/heads/main' && github.event.before == '596f44806dafb7773bdda608798e24b1fd76bb9b' && github.event.forced == false && github.event.created == false && github.event.deleted == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      candidate_hash: ${{ steps.identity.outputs.candidate_hash }}
+      rollback_hash: ${{ steps.identity.outputs.rollback_hash }}
+      candidate_artifact: ${{ steps.identity.outputs.candidate_artifact }}
+      rollback_artifact: ${{ steps.identity.outputs.rollback_artifact }}
+    steps:
+      - name: Checkout exact main transition and ancestry
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: release
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout immutable authorized release tools
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: '47d3a7abd4c6c053c8394e52e3538404709deb77'
+          path: release-tools
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout unchanged immutable bundle and recovery verifier
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: '3c5b3a06e238eac6095f16cfa5ee71012f4ca535'
+          path: trusted
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout exact reviewed feature source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: '1ed7dff5bdc9c5e4018c26584b07fa15b40accf2'
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify immutable guard bytes, exact source and authorized main transition
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools rev-parse HEAD)" = "$RELEASE_TOOLS_SHA"
+          test "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools hash-object scripts/profit-release.py)" = "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools rev-parse "$RELEASE_TOOLS_SHA:scripts/profit-release.py")"
+          python3 release-tools/scripts/profit-release.py guard --repo release --trusted trusted --candidate candidate > scope.json
+          python3 release-tools/scripts/profit-release.py previous --trusted trusted > previous-selection.json
+      - name: Download fixed successful production record
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: sales-auto-published-candidate-40862018905-1
+          run-id: 40862018905
+          github-token: ${{ github.token }}
+          path: previous
+      - name: Capture actual verified live bytes for exact recovery
+        run: |
+          mkdir -p rollback
+          python3 trusted/scripts/security-bundled-release.py capture --selection previous-selection.json --previous previous/site-bundle.tar --previous-summary previous/summary.json --out old-site --bundle rollback/site-bundle.tar > rollback/summary.json
+      - name: Set up fixed repository Node version
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: trusted/.nvmrc
+      - name: Test calculations, audit and build the exact feature source
+        working-directory: candidate
+        env:
+          npm_config_registry: https://registry.npmjs.org
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$FEATURE_SHA"
+          node --test src/simulation.test.js
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm audit --json > ../audit.json
+          node --input-type=module -e 'import fs from "node:fs";if(JSON.parse(fs.readFileSync("../audit.json")).metadata.vulnerabilities.total!==0)throw Error("Audit must be zero")'
+          npm run build
+      - name: Recheck raw helper and candidate bytes after build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools rev-parse HEAD)" = "$RELEASE_TOOLS_SHA"
+          test "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools hash-object scripts/profit-release.py)" = "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools rev-parse "$RELEASE_TOOLS_SHA:scripts/profit-release.py")"
+          python3 release-tools/scripts/profit-release.py guard --repo release --trusted trusted --candidate candidate
+      - name: Install isolated pinned official Chromium tooling
+        run: |
+          python3 trusted/scripts/security-pilot-once.py tooling --out "$RUNNER_TEMP/sales-browser"
+          npm ci --prefix "$RUNNER_TEMP/sales-browser" --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+          node "$RUNNER_TEMP/sales-browser/node_modules/playwright-core/cli.js" install --with-deps chromium
+      - name: Verify old production and both new layouts with synthetic browser data
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAYWRIGHT_CORE: ${{ runner.temp }}/sales-browser/node_modules/playwright-core/index.mjs
+        run: |
+          set -euo pipefail
+          test "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools rev-parse HEAD)" = "$RELEASE_TOOLS_SHA"
+          test "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools hash-object scripts/profit-release.py)" = "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools rev-parse "$RELEASE_TOOLS_SHA:scripts/profit-release.py")"
+          python3 release-tools/scripts/profit-release.py guard --repo release --trusted trusted --candidate candidate
+          unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN
+          node trusted/scripts/security-bundled-browser.mjs --site old-site --live --phase rollback --out evidence/known-good
+          node release-tools/scripts/profit-release-browser.mjs --site candidate/dist --phase preflight --out evidence/desktop
+          node release-tools/scripts/profit-release-browser.mjs --site candidate/dist --phase preflight --out evidence/mobile --mobile
+      - name: Package verified candidate and record immutable bundle identities
+        id: identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools rev-parse HEAD)" = "$RELEASE_TOOLS_SHA"
+          test "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools hash-object scripts/profit-release.py)" = "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools rev-parse "$RELEASE_TOOLS_SHA:scripts/profit-release.py")"
+          python3 release-tools/scripts/profit-release.py guard --repo release --trusted trusted --candidate candidate
+          unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN
+          mkdir -p fixed
+          python3 trusted/scripts/security-bundled-release.py pack --site candidate/dist --kind candidate --source "$FEATURE_SHA" --out fixed/site-bundle.tar > fixed/summary.json
+          python3 - <<'PY'
+          import json,os
+          with open(os.environ['GITHUB_OUTPUT'],'a') as output:
+              for kind,folder in [('candidate','fixed'),('rollback','rollback')]:
+                  summary=json.load(open(folder+'/summary.json'))
+                  expected=os.environ['FEATURE_SHA'] if kind=='candidate' else '596f44806dafb7773bdda608798e24b1fd76bb9b'
+                  assert summary['source_commit']==expected and summary['kind']==kind
+                  output.write(kind+'_hash='+summary['bundle_sha256']+'\n')
+                  output.write(kind+'_artifact=sales-profit-bundle-'+kind+'-'+os.environ['GITHUB_RUN_ID']+'-'+os.environ['GITHUB_RUN_ATTEMPT']+'\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as output:
+              for name in ['scope.json','fixed/summary.json','rollback/summary.json']:
+                  output.write(open(name).read()+'\n')
+          PY
+      - name: Retain immutable verified candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ steps.identity.outputs.candidate_artifact }}
+          path: fixed
+          if-no-files-found: error
+          retention-days: 90
+      - name: Retain immutable exact recovery
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ steps.identity.outputs.rollback_artifact }}
+          path: rollback
+          if-no-files-found: error
+          retention-days: 90
+      - name: Retain preparation evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sales-profit-prepare-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            scope.json
+            previous-selection.json
+            audit.json
+            evidence
+          if-no-files-found: ignore
+          retention-days: 30
+
+  publish:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: https://kyamada-z.github.io/Sales_Haken_simu/
+    env:
+      CANDIDATE_HASH: ${{ needs.prepare.outputs.candidate_hash }}
+      ROLLBACK_HASH: ${{ needs.prepare.outputs.rollback_hash }}
+    steps:
+      - name: Checkout exact main transition and ancestry
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: release
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout immutable authorized release tools
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: '47d3a7abd4c6c053c8394e52e3538404709deb77'
+          path: release-tools
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout unchanged immutable recovery verifier
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: '3c5b3a06e238eac6095f16cfa5ee71012f4ca535'
+          path: trusted
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify immutable guard and unchanged authorized main before other work
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools rev-parse HEAD)" = "$RELEASE_TOOLS_SHA"
+          test "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools hash-object scripts/profit-release.py)" = "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools rev-parse "$RELEASE_TOOLS_SHA:scripts/profit-release.py")"
+          python3 release-tools/scripts/profit-release.py guard --repo release --trusted trusted
+      - name: Download immutable prepared candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ${{ needs.prepare.outputs.candidate_artifact }}
+          path: fixed
+      - name: Download immutable prepared recovery
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ${{ needs.prepare.outputs.rollback_artifact }}
+          path: rollback
+      - name: Materialize only exact hash-verified candidate and recovery bytes
+        run: |
+          python3 trusted/scripts/security-bundled-release.py extract --bundle fixed/site-bundle.tar --summary fixed/summary.json --kind candidate --source "$FEATURE_SHA" --sha256 "$CANDIDATE_HASH" --out candidate-site
+          python3 trusted/scripts/security-bundled-release.py extract --bundle rollback/site-bundle.tar --summary rollback/summary.json --kind rollback --source '596f44806dafb7773bdda608798e24b1fd76bb9b' --sha256 "$ROLLBACK_HASH" --out old-site
+      - name: Set up fixed repository Node version
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: trusted/.nvmrc
+      - name: Install isolated pinned official Chromium tooling before publication
+        run: |
+          python3 trusted/scripts/security-pilot-once.py tooling --out "$RUNNER_TEMP/sales-browser"
+          npm ci --prefix "$RUNNER_TEMP/sales-browser" --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+          node "$RUNNER_TEMP/sales-browser/node_modules/playwright-core/cli.js" install --with-deps chromium
+          printf 'PLAYWRIGHT_CORE=%s\n' "$RUNNER_TEMP/sales-browser/node_modules/playwright-core/index.mjs" >> "$GITHUB_ENV"
+      - name: Configure existing Pages environment
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b
+      - name: Upload exact verified candidate Pages bytes
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa
+        with:
+          name: sales-profit-pages-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate-site
+          retention-days: 30
+      - name: Recheck current main, raw helpers and known live bytes immediately before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools rev-parse HEAD)" = "$RELEASE_TOOLS_SHA"
+          test "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools hash-object scripts/profit-release.py)" = "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools rev-parse "$RELEASE_TOOLS_SHA:scripts/profit-release.py")"
+          python3 release-tools/scripts/profit-release.py guard --repo release --trusted trusted
+          unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN
+          python3 trusted/scripts/security-bundled-release.py known-live --candidate fixed/site-bundle.tar --candidate-summary fixed/summary.json --rollback rollback/site-bundle.tar --rollback-summary rollback/summary.json --allow rollback
+      - name: Publish exact verified candidate
+        id: deploy
+        continue-on-error: true
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
+        with:
+          artifact_name: sales-profit-pages-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Verify production hashes and desktop/mobile feature behavior
+        id: check
+        if: steps.deploy.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools rev-parse HEAD)" = "$RELEASE_TOOLS_SHA"
+          test "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools hash-object scripts/profit-release.py)" = "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools rev-parse "$RELEASE_TOOLS_SHA:scripts/profit-release.py")"
+          python3 release-tools/scripts/profit-release.py guard --repo release --trusted trusted
+          unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN
+          python3 trusted/scripts/security-bundled-release.py known-live --candidate fixed/site-bundle.tar --candidate-summary fixed/summary.json --rollback rollback/site-bundle.tar --rollback-summary rollback/summary.json --allow candidate --attempts 6 > candidate-http.json
+          node release-tools/scripts/profit-release-browser.mjs --site candidate-site --live --phase candidate --out evidence/desktop
+          node release-tools/scripts/profit-release-browser.mjs --site candidate-site --live --phase candidate --out evidence/mobile --mobile
+      - name: Retain published source and exact candidate bundle record
+        id: record
+        if: steps.check.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sales-profit-published-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: fixed
+          if-no-files-found: error
+          retention-days: 90
+      - name: Upload exact old recovery bytes after candidate failure
+        id: recovery_upload
+        if: always() && !cancelled() && (steps.deploy.outcome == 'failure' || steps.check.outcome == 'failure' || steps.record.outcome == 'failure')
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa
+        with:
+          name: sales-profit-pages-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: old-site
+          retention-days: 30
+      - name: Refuse recovery on changed main or unknown live bytes
+        id: recovery_guard
+        if: always() && !cancelled() && steps.recovery_upload.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools rev-parse HEAD)" = "$RELEASE_TOOLS_SHA"
+          test "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools hash-object scripts/profit-release.py)" = "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools rev-parse "$RELEASE_TOOLS_SHA:scripts/profit-release.py")"
+          python3 release-tools/scripts/profit-release.py guard --repo release --trusted trusted
+          unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN
+          python3 trusted/scripts/security-bundled-release.py known-live --candidate fixed/site-bundle.tar --candidate-summary fixed/summary.json --rollback rollback/site-bundle.tar --rollback-summary rollback/summary.json --allow either --attempts 6
+      - name: Recover exact previously verified production bytes
+        id: recovery
+        if: always() && !cancelled() && steps.recovery_guard.outcome == 'success'
+        continue-on-error: true
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
+        with:
+          artifact_name: sales-profit-pages-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Verify actual recovery hashes and previous browser behavior
+        id: recovery_check
+        if: always() && !cancelled() && steps.recovery.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools rev-parse HEAD)" = "$RELEASE_TOOLS_SHA"
+          test "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools hash-object scripts/profit-release.py)" = "$(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN git -C release-tools rev-parse "$RELEASE_TOOLS_SHA:scripts/profit-release.py")"
+          python3 release-tools/scripts/profit-release.py guard --repo release --trusted trusted
+          unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN
+          python3 trusted/scripts/security-bundled-release.py known-live --candidate fixed/site-bundle.tar --candidate-summary fixed/summary.json --rollback rollback/site-bundle.tar --rollback-summary rollback/summary.json --allow rollback --attempts 6 > recovery-http.json
+          node trusted/scripts/security-bundled-browser.mjs --site old-site --live --phase recovery --out evidence/recovery
+      - name: Preserve actual outcomes and keep any failed publication failed
+        if: always()
+        env:
+          DEPLOY: ${{ steps.deploy.outcome }}
+          CHECK: ${{ steps.check.outcome }}
+          RECORD: ${{ steps.record.outcome }}
+          RECOVERY: ${{ steps.recovery.outcome }}
+          RECOVERY_CHECK: ${{ steps.recovery_check.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json,os
+          result={key:os.environ[key] for key in ['DEPLOY','CHECK','RECORD','RECOVERY','RECOVERY_CHECK']}
+          content=json.dumps(result,indent=2)
+          print(content)
+          with open('release-outcomes.json','w') as output: output.write(content+'\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as output: output.write('\n'+content+'\n')
+          assert all(result[key]=='success' for key in ['DEPLOY','CHECK','RECORD']), 'Feature publication failed; report actual recovery outcome.'
+          PY
+      - name: Retain production and recovery evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sales-profit-release-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            evidence
+            *-http.json
+            release-outcomes.json
+          if-no-files-found: ignore
+          retention-days: 30
