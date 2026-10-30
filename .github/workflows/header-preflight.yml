@@ -1,0 +1,77 @@
+name: Sales compact-header preflight
+
+on:
+  push:
+    branches: [codex/compact-simulation-tabs-20261030]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sales-header-preflight
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Checkout exact reviewed test changes
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: tests
+          persist-credentials: false
+      - name: Checkout fixed feature source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: '785892583ab41367bd3184337ca58fee03452ddf'
+          path: candidate
+          persist-credentials: false
+      - name: Checkout existing pinned browser tooling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 3c5b3a06e238eac6095f16cfa5ee71012f4ca535
+          path: trusted
+          persist-credentials: false
+      - name: Set up pinned Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: candidate/.nvmrc
+      - name: Verify guard rejection boundaries and browser fixtures
+        run: |
+          python3 tests/scripts/header-release.test.py
+          node tests/scripts/header-release-browser.mjs --self-test
+      - name: Build and test exact feature
+        working-directory: candidate
+        env:
+          npm_config_registry: https://registry.npmjs.org
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node --test src/simulation.test.js
+          npm audit --json > ../audit.json
+          node --input-type=module -e 'import fs from "node:fs";if(JSON.parse(fs.readFileSync("../audit.json")).metadata.vulnerabilities.total!==0)throw Error("Audit must be zero")'
+          npm run build
+      - name: Install isolated pinned official Chromium
+        run: |
+          python3 trusted/scripts/security-pilot-once.py tooling --out "$RUNNER_TEMP/sales-browser"
+          npm ci --prefix "$RUNNER_TEMP/sales-browser" --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+          node "$RUNNER_TEMP/sales-browser/node_modules/playwright-core/cli.js" install --with-deps chromium
+      - name: Verify actual desktop and mobile UI
+        env:
+          PLAYWRIGHT_CORE: ${{ runner.temp }}/sales-browser/node_modules/playwright-core/index.mjs
+        run: |
+          node tests/scripts/header-release-browser.mjs --site candidate/dist --phase preflight --out evidence/desktop
+          node tests/scripts/header-release-browser.mjs --site candidate/dist --phase preflight --out evidence/mobile --mobile
+      - name: Retain screenshots and verification results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sales-header-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            evidence
+            audit.json
+          if-no-files-found: ignore
+          retention-days: 30
