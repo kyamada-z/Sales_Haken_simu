@@ -79,7 +79,7 @@ const MetricCard = ({ title, value, description, type = 'default' }) => {
   );
 };
 
-export default function ProfitSimulation() {
+export default function ProfitSimulation({ headerTabs }) {
   const [params, setParams] = useState({ ...DEFAULT_PARAMS });
   const [baselineParams, setBaselineParams] = useState(null);
 
@@ -259,19 +259,20 @@ export default function ProfitSimulation() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 md:p-8 font-sans text-gray-800">
-      <div className="max-w-7xl mx-auto space-y-6">
+    <div className="min-h-screen bg-gray-50 p-4 md:p-6 font-sans text-gray-800">
+      <div className="max-w-7xl mx-auto space-y-4">
         
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-              <Calculator className="w-6 h-6 text-blue-600" />
+        <div className="bg-white p-4 md:px-5 rounded-xl shadow-sm border border-gray-100">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <h1 className="text-lg md:text-2xl font-bold text-gray-900 flex items-center gap-2 leading-snug">
+              <Calculator className="w-5 h-5 md:w-6 md:h-6 shrink-0 text-blue-600" />
               派遣売上・粗利シミュレーション
             </h1>
-            <p className="text-gray-500 mt-1 text-sm">
+            {headerTabs}
+          </div>
+            <p className="text-gray-500 mt-2 text-sm">
               人数・単価・退職率と費用率から、指定期間の売上と粗利（社保引き後）を試算します。
             </p>
-          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
